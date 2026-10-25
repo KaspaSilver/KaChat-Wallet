@@ -68,9 +68,6 @@ struct KaChatApp: App {
                 .onAppear {
                     ChatService.shared.settingsViewModel = settingsViewModel
                     applyWindowAppearanceOverride()
-                    if #available(iOS 16.0, macCatalyst 16.0, *) {
-                        KaChatShortcutsProvider.updateAppShortcutParameters()
-                    }
                 }
                 .onChange(of: walletManager.currentWallet?.publicAddress) { newValue in
                     guard newValue != nil else { return }
