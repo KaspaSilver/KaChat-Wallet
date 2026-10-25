@@ -551,6 +551,10 @@ struct ProfileView: View {
             kachatOwnedCount = 0
             return
         }
+        // the saved list's count at once; the read below corrects it when it answers
+        if kachatOwnedCount == 0, let cached = KachatOwnedNamesCache.load(address) {
+            kachatOwnedCount = cached.names.count
+        }
         await kachatRegistry.refreshIfStale(maxAge: 300)
         // the same names Your Domains lists: a lapsed one isn't yours any more
         guard let names = try? await kachatRegistry.heldNames(owner: key) else { return }
@@ -2767,6 +2771,10 @@ private struct KNSDomainsListView: View {
         guard KachatNamesService.isEnabled, KachatNamesService.isLaunched else {
             kachatCount = 0
             return
+        }
+        // the saved list's count at once; the reads below correct it when they answer
+        if kachatCount == nil, let cached = KachatOwnedNamesCache.load(walletAddress) {
+            kachatCount = cached.names.count
         }
         if kachatRegistry.refreshedAt == nil { await kachatRegistry.refresh() }
         if walletAddress.lowercased() == KachatNamesActions.shared.myAddress,

@@ -1310,3 +1310,7 @@ extension KachatNames.RegistryState {
             .map(\.element)
     }
 }
+
+// Your Domains keeps the last answer on the device (`KachatOwnedNamesCache`).
+extension KachatNames.NameInfo: Codable {}
+extension KachatNames.OfferInfo: Codable {}

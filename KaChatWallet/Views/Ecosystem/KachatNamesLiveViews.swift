@@ -3326,6 +3326,7 @@ struct KachatLiveDomainsTab: View {
         }
         .refreshable { await registry.refresh() }
         .task(id: registry.revision) {
+            showCachedIfNeeded()
             await load()
             // a name that lapses while this is open leaves right then
             await registry.dropLapsed(from: names) { names = $0 }
@@ -3384,6 +3385,16 @@ struct KachatLiveDomainsTab: View {
         }
     }
 
+    /// The names this wallet had last time, straight away - they rarely change. `load()` then
+    /// checks the registry and replaces them when it answers (`KachatOwnedNamesCache`).
+    private func showCachedIfNeeded() {
+        guard !loaded, let cached = KachatOwnedNamesCache.load(walletAddress) else { return }
+        let grace = registry.graceMs
+        names = cached.names.filter { $0.status(graceMs: grace) != .lapsed }
+        myOffers = cached.offers
+        loaded = true
+    }
+
     private func load() async {
         guard let key = KachatNamesRegistry.keyOf(walletAddress) else { loaded = true; return }
         if registry.refreshedAt == nil { await registry.refresh() }
@@ -3391,13 +3402,17 @@ struct KachatLiveDomainsTab: View {
         // bell says so, `KachatNamesNotifier`). Expired names in grace stay, to be renewed.
         // Your own list (the chatting address's) holds the names and offers on every address of
         // this wallet - one claimed with Buy From too, on any device restored from the seed.
-        if walletAddress.lowercased() == KachatNamesActions.shared.myAddress,
-           let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: true) {
-            names = own.names
-            myOffers = own.offers
-        } else {
-            names = (try? await registry.heldNames(owner: key)) ?? []
-            myOffers = (try? await registry.myOffers(buyer: key)) ?? []
+        // Only an answer replaces what is shown (and the saved copy); a failed read keeps it.
+        if walletAddress.lowercased() == KachatNamesActions.shared.myAddress {
+            if let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: true) {
+                names = own.names
+                myOffers = own.offers
+                KachatOwnedNamesCache.save(names: names, offers: myOffers, for: walletAddress)
+            }
+        } else if let held = try? await registry.heldNames(owner: key) {
+            names = held
+            myOffers = (try? await registry.myOffers(buyer: key)) ?? myOffers
+            KachatOwnedNamesCache.save(names: names, offers: myOffers, for: walletAddress)
         }
         if !myOffers.isEmpty {
             // expired offers, and ones made to an earlier owner, come back on their own

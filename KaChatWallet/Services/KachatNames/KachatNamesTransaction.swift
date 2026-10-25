@@ -279,3 +279,6 @@ extension KachatNames {
         }
     }
 }
+
+// Stored with the names Your Domains caches (`KachatOwnedNamesCache`).
+extension KachatNames.Outpoint: Codable {}
