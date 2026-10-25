@@ -2158,17 +2158,17 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
     static let pinnedToDock: [AppTab] = [.profile]
 
     /// Tabs the user can place. Excludes the Hub (pinned) and the retired "+ More".
-    /// KaChat Wallet: the wallet's own three; every other KaChat feature stays off.
-    static let assignable: [AppTab] = [.portfolio, .coldStorage, .addressBook]
+    /// KaChat Wallet: the wallet's own four; every other KaChat feature stays off.
+    static let assignable: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook]
 
     /// A default install shows exactly the five the dock can fit - Kaspa Hub, Portfolio, Chats,
     /// KaPosts, Profile - with Cold Storage, Swap and the websites list still ENABLED but living
     /// inside Kaspa Hub rather than competing for a dock slot.
-    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .addressBook, .profile]
+    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook, .profile]
 
     /// What a fresh install starts with (owner's order, 2026-10-20). Everything else starts in
     /// Kaspa Hub. A saved arrangement is the person's and is never reset to this.
-    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .addressBook, .profile]
+    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook, .profile]
 
     /// The rest, in the order the Hub grid shows them until the user rearranges it.
     static let defaultHub: [AppTab] = []
@@ -2238,41 +2238,12 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         }
     }
 
-    /// The resolved order, filtered down to only the tabs the user hasn't hidden and clamped to
-    /// the dock capacity - what MainTabView actually renders and what the Menu Visibility preview
-    /// strip shows. When over capacity, KaPosts drops out first (it stays reachable via re-tapping
-    /// Chats); after that the tail of the order falls off.
     /// What the dock actually renders, in order.
-    ///
-    /// Read from `settings.dockTabs` - the user's placement - rather than derived by taking the
-    /// first few of an order and letting the rest fall off the end. That derivation is what let
-    /// Profile silently disappear: nothing HID it, it was simply pushed past the cap by the tabs
-    /// ahead of it, with nowhere in the UI saying so. A tab is now either placed in the dock or
-    /// placed in the Hub, and it is always in exactly one of them.
-    ///
-    /// Kaspa Hub is inserted whatever the stored list says, so no saved arrangement - or a
-    /// hand-edited one - can leave the app with no way to reach what isn't in the dock.
     static func visible(from settings: AppSettings) -> [AppTab] {
-        // The stored order, deduplicated defensively (a repeated raw value would render the same
-        // tab twice), with at most `assignableDockSlots` picks besides the pinned tabs.
-        var seen = Set<AppTab>()
-        var picks = 0
-        var tabs: [AppTab] = []
-        for tab in settings.dockTabs.compactMap({ AppTab(rawValue: $0) })
-        where tab.isEnabled(in: settings) && (tab.isPinnedToDock || assignable.contains(tab)) && seen.insert(tab).inserted {
-            if !tab.isPinnedToDock {
-                guard picks < assignableDockSlots else { continue }
-                picks += 1
-            }
-            tabs.append(tab)
-        }
-        // Reinserted whatever the stored list says, so no saved arrangement - or a hand-edited one
-        // - can leave the app without Chats, the Hub that holds everything else, or Profile.
-        for pinned in pinnedToDock where pinned.isEnabled(in: settings) && !tabs.contains(pinned) {
-            let position = defaultDock.firstIndex(of: pinned) ?? tabs.count
-            tabs.insert(pinned, at: min(position, tabs.count))
-        }
-        return tabs
+        // KaChat Wallet's dock is fixed: always `defaultDock`, minus anything switched off (Simple
+        // Mode hides .kachat). A saved `dockTabs` is ignored, so an install from before a tab was
+        // added still gets it.
+        defaultDock.filter { $0.isEnabled(in: settings) }
     }
 
     /// What the Kaspa Hub grid shows: everything assignable that is not in the dock, in the

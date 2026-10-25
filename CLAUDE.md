@@ -5,8 +5,8 @@ Guidance for Claude Code in this repository.
 ## What KaChat Wallet is
 
 KaChat Wallet is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
-1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, Address Book and
-the whole account Profile (receive, addresses, domains, settings, help, log out, about).
+1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, the .kachat names
+marketplace, Address Book and the whole account Profile (receive, addresses, domains, settings, help, log out, about).
 
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `b603eb9f`
 (2026-10-24). Most of `KaChatWallet/` is still that code, including features the wallet never
@@ -15,13 +15,14 @@ being removed step by step; until then, change only what the wallet uses.
 
 ## Dock
 
-Four fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
+Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 `KaChatWallet/App/MainTabView.swift`):
 
 | Tab | View |
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
+| .kachat | `KachatMarketView` (`Views/Ecosystem/`) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
 | Address Book | `AddressBookView` (`Views/Contacts/AddressBookView.swift`) |
 | Profile | `ProfileView` (`Views/Contacts/ContactsView.swift`); Settings opens from here |
 

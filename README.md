@@ -4,6 +4,7 @@ A Kaspa wallet for iPhone, from the makers of KaChat.
 
 - **Portfolio** - your balance, its value, price and network charts, and every transaction
 - **Cold Storage** - watch and spend funds held on an air-gapped KasSigner device (signing happens on the device, by QR)
+- **.kachat** - the .kachat names marketplace: find, claim, buy and sell names
 - **Address Book** - saved Kaspa addresses with names
 - **Profile** - receive, your addresses, your domains, settings
 
