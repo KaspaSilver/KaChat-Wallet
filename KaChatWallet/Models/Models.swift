@@ -2148,26 +2148,33 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
     /// the dock - move it inside itself and everything it holds becomes unreachable. Profile,
     /// because it is the way to Settings, the account list and the wallet's own addresses, so it
     /// is the one screen that must never be a level deeper than the dock.
-    var isPinnedToDock: Bool { self == .chats || self == .ecosystem || self == .profile }
+    ///
+    /// KaChat Wallet: only Profile, the way to Settings and the account list. The wallet has no
+    /// Chats and no Kaspa Hub.
+    var isPinnedToDock: Bool { self == .profile }
 
     /// In the order a fresh dock places them, so `visible` can reinsert a missing one sensibly.
     /// Where they sit among the five is the person's (Customize Dock); that they are there is not.
-    static let pinnedToDock: [AppTab] = [.ecosystem, .chats, .profile]
+    static let pinnedToDock: [AppTab] = [.profile]
 
     /// Tabs the user can place. Excludes the Hub (pinned) and the retired "+ More".
-    static let assignable: [AppTab] = [.chats, .portfolio, .coldStorage, .swap, .kaposts, .apps, .chess, .kachatNames, .addressBook, .kachatBots]
+    /// KaChat Wallet: the wallet's own three; every other KaChat feature stays off.
+    static let assignable: [AppTab] = [.portfolio, .coldStorage, .addressBook]
 
     /// A default install shows exactly the five the dock can fit - Kaspa Hub, Portfolio, Chats,
     /// KaPosts, Profile - with Cold Storage, Swap and the websites list still ENABLED but living
     /// inside Kaspa Hub rather than competing for a dock slot.
-    static let defaultOrder: [AppTab] = [.ecosystem, .portfolio, .chats, .kaposts, .profile, .coldStorage, .addressBook, .kachatNames, .kachatBots, .swap, .publicChats, .apps, .chess]
+    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .addressBook, .profile]
 
     /// What a fresh install starts with (owner's order, 2026-10-20). Everything else starts in
     /// Kaspa Hub. A saved arrangement is the person's and is never reset to this.
-    static let defaultDock: [AppTab] = [.ecosystem, .portfolio, .chats, .kaposts, .profile]
+    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .addressBook, .profile]
 
     /// The rest, in the order the Hub grid shows them until the user rearranges it.
-    static let defaultHub: [AppTab] = [.coldStorage, .addressBook, .kachatNames, .kachatBots, .swap, .apps]
+    static let defaultHub: [AppTab] = []
+
+    /// KaChat Wallet's home: where the app opens and where it lands when the open tab goes away.
+    static let home: AppTab = .portfolio
 
     /// Slots the user can actually fill: the cap minus the pinned tabs.
     static var assignableDockSlots: Int { maxDockItems - pinnedToDock.count }
@@ -2203,6 +2210,8 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
             default: break
             }
         }
+        // KaChat Wallet shows only its own tabs, whatever a saved setting says.
+        guard Self.defaultOrder.contains(self) else { return false }
         switch self {
         case .portfolio: return !settings.hidePortfolioTab
         case .coldStorage: return !settings.hideColdStorageTab

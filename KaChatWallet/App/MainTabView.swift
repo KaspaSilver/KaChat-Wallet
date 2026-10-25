@@ -3,7 +3,7 @@ import Combine
 import UIKit
 
 struct MainTabView: View {
-    @State private var selectedTab = 1
+    @State private var selectedTab = AppTab.home.tag
     /// A local Core Data store failed to open (see `CoreDataStoreLoader.reportFailure`).
     @State private var storeLoadFailure: String?
 
@@ -147,32 +147,10 @@ struct MainTabView: View {
             // Home Screen widget snapshot - without this, the widget stays empty until the
             // user first visits the Portfolio tab.
             _ = PortfolioViewModel.shared
-            if walletManager.justCreatedNewWallet {
-                walletManager.justCreatedNewWallet = false
-                // Persisted BEFORE presenting: justCreatedNewWallet is in-memory only, so an
-                // app kill mid-wizard would otherwise be a permanent way past the mandatory
-                // Adult/Child step - the pending markers make the next launch re-present it.
-                // The onboarding-run marker covers devices where Adult/Child was already
-                // answered for a prior account ("chosen" never downgrades), so an interrupted
-                // IMPORT wizard re-presents exactly like an interrupted create does.
-                WelcomeGuideView.markUserTypePending()
-                WelcomeGuideView.markOnboardingRunPending()
-                showWelcomeGuide = true
-            } else if WelcomeGuideView.isUserTypePending {
-                // First-run guide was interrupted before the Adult/Child choice: bring the
-                // wizard back at that step, on every launch, until it's answered.
-                resumeGuideAtUserType = true
-                showWelcomeGuide = true
-            } else if WelcomeGuideView.isOnboardingRunPending {
-                // Onboarding run interrupted AFTER the Adult/Child choice was already settled
-                // (e.g. an import on a device that answered it for a prior account): re-present
-                // the full guide from the top, still as an unskippable onboarding run.
-                showWelcomeGuide = true
-            } else {
-                // No setup guide is coming, so nothing is waiting on it - lift any hold rather
-                // than leaving the account permanently unsynced.
-                chatService.releaseSyncForOnboarding()
-            }
+            // KaChat Wallet: no welcome guide - KaChat's walks through chats and the dock, which
+            // the wallet doesn't have - so nothing waits on it: lift the onboarding hold now.
+            walletManager.justCreatedNewWallet = false
+            chatService.releaseSyncForOnboarding()
         }
         .fullScreenCover(isPresented: $showInitialSyncProgress) {
             InitialSyncProgressModal(onDismiss: { showInitialSyncProgress = false })
@@ -256,7 +234,7 @@ struct MainTabView: View {
             routeToWalletTab(.coldStorage)
         }
         .onReceive(NotificationCenter.default.publisher(for: .openGroup)) { _ in
-            selectedTab = 1
+            routeToFeature(.chats)
         }
         .onReceive(NotificationCenter.default.publisher(for: .openCustomizeDock)) { _ in
             showCustomizeDock = true
@@ -282,12 +260,12 @@ struct MainTabView: View {
         .onChange(of: AppTab.visible(from: settingsViewModel.settings).map(\.tag)) { visibleTags in
             // Menu toggles can remove the currently-selected page (or hand its position to
             // another tab) mid-flight - a TabView whose selection points at a page that no longer
-            // exists renders a stuck black screen. Snap home to Chats whenever that happens.
+            // exists renders a stuck black screen. Snap home (Portfolio) whenever that happens.
             if !visibleTags.contains(selectedTab) {
                 // Through the handler (not a bare @State write) so the debounced power-save
                 // machinery runs too - a bare write landed the user on Chats with node discovery
                 // paused and the poll timer dead.
-                handleTabSelectionChange(1)
+                handleTabSelectionChange(AppTab.home.tag)
             }
         }
     }
@@ -376,22 +354,23 @@ struct MainTabView: View {
             return
         }
 
-        // Off-chat-tab power saving, DEBOUNCED so rapidly flipping tabs can't thrash start/stop
+        // Off-home-tab power saving, DEBOUNCED so rapidly flipping tabs can't thrash start/stop
         // (which was restarting the initial sync and freezing the UI). Only the settled tab - after
         // a short quiet period - pauses or resumes the node pool's aggressive discovery/probe loops
         // and the fallback message-poll timer. The pool + UTXO subscription stay live, so sending,
         // on-demand balance/history and push keep working; only background scanning stops.
+        // KaChat Wallet: the home tab (Portfolio) plays the part KaChat's Chats tab did, and the
+        // message-poll timer stays off - the wallet has no chats to poll for.
         tabWorkTask?.cancel()
         tabWorkTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             if Task.isCancelled { return }
-            if newValue == AppTab.chats.tag {
+            if newValue == AppTab.home.tag {
                 await NodePoolService.shared.resumeDiscovery()
-                chatService.startPolling()
             } else {
                 await NodePoolService.shared.pauseDiscovery()
-                chatService.stopPollingTimerOnly()
             }
+            chatService.stopPollingTimerOnly()
         }
     }
 
@@ -400,7 +379,7 @@ struct MainTabView: View {
     /// Public Chat notification or a shared room link: the rooms are the Chats screen's Public
     /// Chats tab now. ChatListView switches to that tab on the same signals, and the rooms
     /// screen picks up the pending channel itself.
-    private func routeToPublicChats() { selectedTab = AppTab.chats.tag }
+    private func routeToPublicChats() { routeToFeature(.chats) }
 
     /// KaPosts notification or a shared-post link. KaPostsView picks up the pending txid itself.
     private func routeToKaPosts() { routeToFeature(.kaposts) }
@@ -420,7 +399,7 @@ struct MainTabView: View {
             EcosystemRouter.shared.openSection(feature)
             selectedTab = AppTab.ecosystem.tag
         } else {
-            selectedTab = AppTab.chats.tag
+            selectedTab = AppTab.home.tag
         }
     }
 
@@ -471,7 +450,7 @@ struct MainTabView: View {
             chatService.pendingProfileAddress != nil ||
             GroupChatService.shared.pendingGroupNavigation != nil ||
             GroupChatService.shared.pendingGroupListNavigation {
-            selectedTab = AppTab.chats.tag
+            routeToFeature(.chats)
         }
     }
 

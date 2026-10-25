@@ -197,20 +197,7 @@ struct SettingsView: View {
                     // per-account and the guides need an active wallet.
                     AppWideCustomizationPickers()
 
-                    // The sheet above the tab bar (MainTabView), never a page in here: the dock
-                    // updates live, and every change rebuilds the tabs this page sits in.
-                    Button {
-                        NotificationCenter.default.post(name: .openCustomizeDock, object: nil)
-                    } label: {
-                        HStack {
-                            Label("Customize Dock", systemImage: "list.bullet")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundColor(Color(.tertiaryLabel))
-                        }
-                    }
+                    // No Customize Dock: KaChat Wallet's four tabs are fixed.
 
                     // Moved here from Chats: it decides whether a number is drawn on the
                     // composer, which is a display preference, not a chat behaviour.
