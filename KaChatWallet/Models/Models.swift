@@ -2072,7 +2072,8 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         // the Ecosystem grid and the screen itself show.
         case .apps: return "Websites"
         case .chess: return "Chess"
-        case .kachatNames: return ".kachat"
+        // Under the ".kachat" wordmark in the dock, so the item reads ".kachat" / "Domains".
+        case .kachatNames: return "Domains"
         case .addressBook: return "Address Book"
         case .kachatBots: return "Bots"
         case .ecosystem: return "Kaspa Hub"

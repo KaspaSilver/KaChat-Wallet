@@ -4,13 +4,15 @@ import UIKit
 /// The ".kachat" wordmark as a template image - the Kaspa Hub tile, the dock item and Customize
 /// Dock draw it the way `ChessTabIcon` draws the chess pieces, tinted like any SF Symbol.
 enum KachatTabIcon {
-    private static var cache: [Int: UIImage] = [:]
+    private static var cache: [String: UIImage] = [:]
 
-    /// A template image `side` points tall; the word is wider than it is tall.
-    static func image(side: CGFloat) -> UIImage {
-        let key = Int(side.rounded())
+    /// A template image `side` points tall; the word is wider than it is tall. `fontScale` is the
+    /// word's size as a share of `side` - the dock passes a smaller one, so the item is no wider
+    /// than the tabs beside it.
+    static func image(side: CGFloat, fontScale: CGFloat = 0.62) -> UIImage {
+        let key = "\(Int(side.rounded()))-\(Int((fontScale * 100).rounded()))"
         if let cached = cache[key] { return cached }
-        let font = UIFont.systemFont(ofSize: side * 0.62, weight: .heavy)
+        let font = UIFont.systemFont(ofSize: side * fontScale, weight: .heavy)
         let rounded = font.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
         let text = NSAttributedString(string: ".kachat", attributes: [.font: rounded, .foregroundColor: UIColor.black])
         let measured = text.size()

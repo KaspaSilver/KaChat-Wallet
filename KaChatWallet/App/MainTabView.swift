@@ -102,7 +102,9 @@ struct MainTabView: View {
                             } else if tab == .chess {
                                 Image(uiImage: ChessTabIcon.image(side: 24))
                             } else if tab == .kachatNames {
-                                Image(uiImage: KachatTabIcon.image(side: 24))
+                                // Small enough to sit over its "Domains" label at the width of
+                                // the other tabs: the item reads ".kachat" / "Domains".
+                                Image(uiImage: KachatTabIcon.image(side: 24, fontScale: 0.44))
                             } else {
                                 Image(systemName: tab.icon)
                             }
