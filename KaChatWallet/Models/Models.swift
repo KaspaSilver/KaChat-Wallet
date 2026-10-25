@@ -2065,7 +2065,8 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .coldStorage: return "Storage"
         case .chats: return "Chats"
         case .swap: return "Swap"
-        case .profile: return "Profile"
+        // KaChat Wallet calls it "Wallet" in the dock, like KaPosts' wallet tab (owner's call).
+        case .profile: return "Wallet"
         case .kaposts: return "KaPosts"
         case .publicChats: return "Public Chats"
         // Short enough for a dock label. `ecosystemTitle` carries the full name, which is what
@@ -2088,7 +2089,10 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .coldStorage: return "lock.shield"
         case .chats: return "bubble.left.and.bubble.right"
         case .swap: return "arrow.left.arrow.right"
-        case .profile: return "person.crop.circle"
+        // KaPosts' wallet symbol; it only exists from iOS 17, so iOS 16 gets the pass-style wallet.
+        case .profile:
+            if #available(iOS 17, *) { return "wallet.bifold" }
+            return "wallet.pass"
         case .kaposts: return "square.and.pencil"
         case .publicChats: return "dot.radiowaves.left.and.right"
         case .apps: return "globe"
