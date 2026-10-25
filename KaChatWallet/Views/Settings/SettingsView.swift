@@ -193,14 +193,9 @@ struct SettingsView: View {
                     // per-account and the guides need an active wallet.
                     AppWideCustomizationPickers()
 
-                    // No Customize Dock: KaChat Wallet's four tabs are fixed.
-
-                    // Moved here from Chats: it decides whether a number is drawn on the
-                    // composer, which is a display preference, not a chat behaviour.
-                    Toggle("Show Fee Estimate", isOn: $settingsViewModel.settings.showFeeEstimate)
-                        .onChange(of: settingsViewModel.settings.showFeeEstimate) { _ in
-                            settingsViewModel.saveSettings()
-                        }
+                    // No Customize Dock: KaChat Wallet's tabs are fixed.
+                    // No Show Fee Estimate: it only governed the chat composers' fee label;
+                    // the wallet always shows the fee wherever KAS is sent (owner's call).
                 }
         }
         .navigationTitle("Customization")

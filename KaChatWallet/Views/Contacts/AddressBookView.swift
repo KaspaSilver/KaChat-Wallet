@@ -53,7 +53,9 @@ struct AddressBookView: View {
                 }
             }
             .navigationTitle("Addresses")
-            .navigationBarTitleDisplayMode(.inline)
+            // Large, so "Addresses" shows under the bar (the balance holds the bar's middle),
+            // as the other tabs show their titles.
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     ConnectionStatusIndicator()

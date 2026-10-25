@@ -136,7 +136,8 @@ struct ProfileView: View {
             // slot - identical to what the bar showed mid-scroll before.
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 12) {
-                    Text("Profile")
+                    // KaChat Wallet: this screen is the "Wallet" tab.
+                    Text("Wallet")
                         .font(.largeTitle.weight(.bold))
                     profileShareButton
                     Spacer(minLength: 0)
@@ -148,7 +149,7 @@ struct ProfileView: View {
                 // mode, no gray material blur.
                 .background(Color(UIColor.systemBackground))
             }
-            .navigationTitle("Profile")
+            .navigationTitle("Wallet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // One item per side (dot left, bell right) so the bar's glass pills hug their
