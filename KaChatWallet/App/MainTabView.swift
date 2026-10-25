@@ -148,6 +148,8 @@ struct MainTabView: View {
             // the wallet doesn't have - so nothing waits on it: lift the onboarding hold now.
             walletManager.justCreatedNewWallet = false
             chatService.releaseSyncForOnboarding()
+            // Clears a chat badge an earlier build left on the icon.
+            chatService.updateAppBadge()
             requestNotificationPermissionIfNeeded()
         }
         .fullScreenCover(isPresented: $showInitialSyncProgress) {

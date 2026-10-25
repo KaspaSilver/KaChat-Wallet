@@ -1172,12 +1172,10 @@ extension ChatService {
     }
 
     func updateAppBadge() {
-        // Message Requests and blocked chats don't count: an unaccepted sender must not be able
-        // to keep ringing the badge (NO_HANDSHAKE_MESSAGING.md).
-        let totalUnread = conversations.reduce(0) { total, conversation in
-            guard isConversationVisibleInChatList(conversation) else { return total }
-            return total + max(0, conversation.unreadCount)
-        } + GroupChatService.shared.totalGroupUnreadCount
+        // KaChat Wallet shows no chats, so unread chat messages (which KaChat's sync can still
+        // pick up for the wallet's address) must never badge the icon - nobody could clear it.
+        // The icon carries no badge at all.
+        let totalUnread = 0
         SharedDataManager.setUnreadCount(totalUnread)
         if #available(iOS 16.0, *) {
             UNUserNotificationCenter.current().setBadgeCount(totalUnread)
