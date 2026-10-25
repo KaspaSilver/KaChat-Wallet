@@ -3159,7 +3159,7 @@ struct KachatTransferSheet: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
-                    .accessibilityLabel(Text("Address Book"))
+                    .accessibilityLabel(Text("Addresses"))
                 }
                 if let saved = addressBook.entry(for: resolved?.address ?? input) {
                     Label(saved.name, systemImage: "book.closed.fill")

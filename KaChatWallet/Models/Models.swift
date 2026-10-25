@@ -2074,7 +2074,8 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .chess: return "Chess"
         // Under the domains logo in the dock (`KachatTabIcon.domainsImage`).
         case .kachatNames: return ".kachat"
-        case .addressBook: return "Address Book"
+        // KaChat Wallet calls it "Addresses" (owner's call, 2026-10-24).
+        case .addressBook: return "Addresses"
         case .kachatBots: return "Bots"
         case .ecosystem: return "Kaspa Hub"
         case .more: return "More"

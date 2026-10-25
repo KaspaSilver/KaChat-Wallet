@@ -52,7 +52,7 @@ struct AddressBookView: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Address Book")
+            .navigationTitle("Addresses")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -808,7 +808,7 @@ struct AddressBookPickerSheet: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Address Book")
+            .navigationTitle("Addresses")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
