@@ -1396,6 +1396,7 @@
 "Addresses" = "アドレス";
 "Wallet" = "ウォレット";
 "Push" = "プッシュ";
+"Save a Kaspa address with a name you'll recognize." = "Kaspaアドレスをわかりやすい名前で保存します。";
 "Add to Address Book" = "アドレス帳に追加";
 "Search names and addresses" = "名前とアドレスを検索";
 "Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts." = "よく使うKaspaアドレスを、分かりやすい名前で保存できます。KaChatの中だけに、このウォレット専用で保存され、電話の連絡先には一切入りません。";

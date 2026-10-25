@@ -1397,6 +1397,7 @@
 "Addresses" = "Addresses";
 "Wallet" = "Wallet";
 "Push" = "Push";
+"Save a Kaspa address with a name you'll recognize." = "Save a Kaspa address with a name you'll recognize.";
 "Add to Address Book" = "Add to Address Book";
 "Search names and addresses" = "Search names and addresses";
 "Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts." = "Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts.";
