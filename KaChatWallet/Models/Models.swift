@@ -2165,11 +2165,12 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
     /// A default install shows exactly the five the dock can fit - Kaspa Hub, Portfolio, Chats,
     /// KaPosts, Profile - with Cold Storage, Swap and the websites list still ENABLED but living
     /// inside Kaspa Hub rather than competing for a dock slot.
-    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook, .profile]
+    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .addressBook]
 
     /// What a fresh install starts with (owner's order, 2026-10-20). Everything else starts in
     /// Kaspa Hub. A saved arrangement is the person's and is never reset to this.
-    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook, .profile]
+    /// KaChat Wallet: Profile sits in the middle (owner's call, 2026-10-24).
+    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .addressBook]
 
     /// The rest, in the order the Hub grid shows them until the user rearranges it.
     static let defaultHub: [AppTab] = []

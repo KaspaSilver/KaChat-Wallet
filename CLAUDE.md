@@ -22,9 +22,9 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
+| Profile | `ProfileView` (`Views/Contacts/ContactsView.swift`); Settings opens from here |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
 | Address Book | `AddressBookView` (`Views/Contacts/AddressBookView.swift`) |
-| Profile | `ProfileView` (`Views/Contacts/ContactsView.swift`); Settings opens from here |
 
 Account setup is KaChat's: `ContentView` -> `OnboardingView` (create / import a seed) ->
 `MainTabView`. The sign-in screen says "KaChat Wallet" with the wallet logo and no tagline; KaChat's
