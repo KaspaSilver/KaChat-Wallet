@@ -1882,62 +1882,11 @@ struct ConnectionSettingsView: View {
         return "https://" + trimmed
     }
 
+    /// KaChat Wallet's Push tab: only the push registration server. The message, KaPosts and
+    /// Public Chats indexer fields are gone (no chats here); their saved values are kept as they
+    /// are - .kachat still reads the message indexer's address, at its default.
     @ViewBuilder
-    private var indexerSections: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Indexer URL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField(indexerPlaceholder(AppSettings.defaultIndexerURL), text: $indexerURL)
-                    .font(.system(.body, design: .monospaced))
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                httpsInlineError(for: indexerURL)
-            }
-        } header: {
-            Text("Message Indexer")
-        } footer: {
-            Text("Message indexer service for chat functionality")
-        }
-
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("KaPost Indexer URL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField(indexerPlaceholder(AppSettings.defaultKaPostIndexerURL), text: $kaPostIndexerURL)
-                    .font(.system(.body, design: .monospaced))
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                httpsInlineError(for: kaPostIndexerURL)
-            }
-        } header: {
-            Text("KaPost Indexer")
-        } footer: {
-            Text("K social network indexer that powers KaPosts feeds")
-        }
-
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Public Chats Indexer URL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField(indexerPlaceholder(AppSettings.defaultPublicChatIndexerURL), text: $publicChatIndexerURL)
-                    .font(.system(.body, design: .monospaced))
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                httpsInlineError(for: publicChatIndexerURL)
-            }
-        } header: {
-            Text("Public Chats Indexer")
-        } footer: {
-            Text("KaChat public chat history indexer for #kaspa and #kachat-bugs")
-        }
-
+    private var pushSections: some View {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Push Indexer URL")
@@ -2074,28 +2023,6 @@ struct ConnectionSettingsView: View {
     }
 
     @ViewBuilder
-    private var translationSections: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Translation Service URL")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField(AppSettings.defaultTranslationServiceURL, text: $translationServiceURL)
-                    .font(.system(.body, design: .monospaced))
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                httpsInlineError(for: translationServiceURL)
-            }
-        } header: {
-            Text("Translation Service")
-        } footer: {
-            Text("Translates KaPosts written in another language. Runs on the KaPost indexer's box by default; point this at your own if you host one (see TRANSLATION_SERVICE.md).")
-        }
-
-    }
-
-    @ViewBuilder
     private var domainsSections: some View {
         // .kachat first: it is what every address field resolves before anything else.
         Section {
@@ -2180,22 +2107,22 @@ struct ConnectionSettingsView: View {
     }
 
     /// One tab per kind of connection, so the page stays short as the app talks to more
-    /// services: indexers, the Kaspa node, translation, name services, the block explorer.
+    /// services: push registration, the Kaspa node, name services, the block explorer.
+    /// KaChat Wallet has no Indexer tab (no chats) and no Translation tab (no KaPosts).
     private enum ConnectionTab: String, CaseIterable {
-        case indexer, node, translation, domains, explorer
+        case push, node, domains, explorer
 
         var title: String {
             switch self {
-            case .indexer: return "Indexer"
+            case .push: return "Push"
             case .node: return "Node"
-            case .translation: return "Translation"
             case .domains: return "Domains"
             case .explorer: return "Explorer"
             }
         }
     }
 
-    @State private var selectedTab: ConnectionTab = .indexer
+    @State private var selectedTab: ConnectionTab = .push
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2206,9 +2133,8 @@ struct ConnectionSettingsView: View {
             // Save covers every tab: the fields keep their edits while you switch between them.
             Form {
                 switch selectedTab {
-                case .indexer: indexerSections
+                case .push: pushSections
                 case .node: nodeSections
-                case .translation: translationSections
                 case .domains: domainsSections
                 case .explorer: explorerSections
                 }

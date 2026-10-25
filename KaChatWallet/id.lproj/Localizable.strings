@@ -1395,6 +1395,7 @@
 "Address Book" = "Buku Alamat";
 "Addresses" = "Alamat";
 "Wallet" = "Dompet";
+"Push" = "Push";
 "Add to Address Book" = "Tambahkan ke Buku Alamat";
 "Search names and addresses" = "Cari nama dan alamat";
 "Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts." = "Simpan alamat Kaspa yang Anda pakai dengan nama yang mudah dikenali. Alamat itu tetap di KaChat, hanya untuk dompet ini, dan tidak pernah masuk ke Kontak ponsel Anda.";
