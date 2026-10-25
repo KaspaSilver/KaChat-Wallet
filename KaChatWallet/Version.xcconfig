@@ -1,0 +1,54 @@
+// Local, gitignored secrets (API keys). Optional include: missing file is fine - the app
+// builds with empty keys and the affected feature (Swap) degrades instead of the build
+// breaking. Copy Secrets.xcconfig.example to Secrets.xcconfig and fill in real values.
+#include? "Secrets.xcconfig"
+
+// Shared version/build-number source for every target (main app, KaChatNotificationService,
+// KaChatShareExtension). App Store Connect requires every bundle in an archive to share the
+// exact same CFBundleVersion - before this file existed, each target carried its own
+// independent copy of CURRENT_PROJECT_VERSION/MARKETING_VERSION in project.pbxproj, so
+// Xcode Cloud's automatic build-number management only updated the main app (whichever target
+// it treats as primary), leaving the extensions on a stale value and failing archive
+// validation with "The CFBundleVersion of an app extension must match that of its containing
+// parent app." Routing all three targets through this single file means any tool that bumps
+// the version only has to change it here for it to apply everywhere.
+//
+// Build numbers are scoped PER VERSION TRAIN by App Store Connect: within one marketing
+// version each upload's CFBundleVersion must be strictly greater than the last (that's why
+// 3.0 ended at 202607032343 - an early `date +%Y%m%d%H%M` script set the high-water mark and
+// restarting low inside the 3.0 train was rejected). Moving to a NEW marketing version resets
+// the train, so each train legitimately starts back at build 1 and counts up 2, 3, ... from
+// there - 4.0 did, 4.1 did, and 5.0 does the same (4.1 shipped to the App Store 2026-09-15).
+// Build numbers, the honest version. Xcode Cloud rewrites CFBundleVersion inside the archived
+// bundles after the build with its own per-product counter, which only ever goes up (an early
+// date-stamp script pushed it to 202607032479, so Cloud betas read 5.0 (2026070324xx)). Nothing
+// in the project changes that: stamping CURRENT_PROJECT_VERSION in ci_pre_xcodebuild.sh was
+// overridden, and binding CFBundleVersion to our own $(KACHAT_BUILD_NUMBER) in every Info.plist
+// was overwritten in the archive too - both tried on 2026-09-15, both came out as the long
+// number. The user accepted the long numbers for Cloud betas.
+//
+// The values below govern LOCAL archives only (Product > Archive in Xcode). They continue
+// Xcode Cloud's numbering (2026-10-10): App Store Connect wants each upload's CFBundleVersion
+// above the last one in the same marketing version, and 5.2's uploads carry Cloud's long numbers
+// (Cloud build 202607032578 was the last), so a local archive starts at the next one. Bump
+// CURRENT_PROJECT_VERSION by 1 before each local archive you upload. Cloud keeps its own counter
+// and does not read this, so if a local build is uploaded, raise Cloud's next build number above
+// it (App Store Connect > Xcode Cloud > Settings > Build Number) or Cloud's next upload collides.
+// When Cloud's archive exists and only its export failed, upload that archive instead (it already
+// carries Cloud's number) - nothing to bump.
+//
+// What the app SHOWS in About is the real CFBundleVersion's last 4 digits: "5.2 (2579)" for
+// 202607032579, counting up with every build, plain "5.2" once KACHAT_IS_RELEASE is YES for the
+// App Store release. KACHAT_BUILD_NUMBER is no longer shown (kept for the Info.plist key).
+// A build run from Xcode (not Cloud, not an archive) gets its own next number from the app
+// target's "Local Build Number" script phase: one above CURRENT_PROJECT_VERSION, then one more
+// per build, kept in the gitignored KaChat/.local-build-number - so About counts up there too.
+KACHAT_BUILD_NUMBER = 1
+KACHAT_IS_RELEASE = NO
+CURRENT_PROJECT_VERSION = 202607032579
+MARKETING_VERSION = 5.2.2
+
+// Required for `agvtool` (used by ci_scripts/ci_pre_xcodebuild.sh) to be able to write
+// CURRENT_PROJECT_VERSION for every target - without this, agvtool fails with "not using
+// Apple Generic Versioning".
+VERSIONING_SYSTEM = apple-generic

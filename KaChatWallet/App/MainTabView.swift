@@ -1,0 +1,690 @@
+import SwiftUI
+import Combine
+import UIKit
+
+struct MainTabView: View {
+    @State private var selectedTab = 1
+    /// A local Core Data store failed to open (see `CoreDataStoreLoader.reportFailure`).
+    @State private var storeLoadFailure: String?
+
+    private var storeLoadFailureShown: Binding<Bool> {
+        Binding(get: { storeLoadFailure != nil }, set: { if !$0 { storeLoadFailure = nil } })
+    }
+
+    private static func storeFailureMessage(from note: Notification) -> String {
+        let store = note.userInfo?["store"] as? String ?? "store"
+        let detail = note.userInfo?["message"] as? String ?? ""
+        let what: String
+        switch store {
+        case "MessageStore": what = "your message history"
+        case "GroupStore": what = "your group chats"
+        case "PublicChatStore": what = "public chat history"
+        default: what = "local data"
+        }
+        return "KaChat couldn't open \(what) on this device. Messages will not be saved until it can. Restarting the app usually fixes this; if it keeps happening, export diagnostics from Settings and contact support.\n\n\(detail)"
+    }
+    /// Customize Dock, hosted here rather than pushed inside a tab - see the notification's note.
+    @State private var showCustomizeDock = false
+    /// Debounces the off-chat-tab discovery pause/resume so rapid tab-flipping can't thrash it.
+    @State private var tabWorkTask: Task<Void, Never>?
+    @State private var showWelcomeGuide = false
+    /// The guide is being re-presented because a first run was interrupted (app killed) before
+    /// the Adult/Child step was answered - jump straight back to that step.
+    @State private var resumeGuideAtUserType = false
+    /// 4.0 "what's new" wizard: shown on every entry into the app until the user taps
+    /// Don't Show Again (persisted per device).
+    /// Blocking progress while the post-onboarding sync runs.
+    @State private var showInitialSyncProgress = false
+    /// The call screen (ringing in, ringing out, connected) sits over the whole app, whichever
+    /// tab is showing - a call is not a page of the chat it started from.
+    @ObservedObject private var callService = CallService.shared
+    @ObservedObject private var pictureInPicture = CallPictureInPicture.shared
+    /// What the Chats slot currently shows: .chats, or a masked-out tab (.kaposts/.public chats)
+    @Environment(\.scenePhase) private var scenePhase
+    /// Not observed. This view only CALLS into these two (start/stop polling, onboarding holds,
+    /// pending routes) and renders nothing from them, but as @EnvironmentObjects every chat
+    /// sync step, fetch state, conversation update and balance write re-ran the root TabView -
+    /// re-applying every tab item and badge - underneath whatever screen was open.
+    private var chatService: ChatService { ChatService.shared }
+    private var walletManager: WalletManager { WalletManager.shared }
+    @EnvironmentObject var settingsViewModel: SettingsViewModel
+    /// The address a tapped "Received" notification opened (its history, in a sheet).
+    @State private var ownAddressSheet: OwnAddressSheetTarget?
+    // Red dot on the Profile tab while the bell (which lives on the Profile screen)
+    // holds unread notifications.
+    @ObservedObject private var notifCenter = GlobalNotificationCenter.shared
+    @ObservedObject private var kaPostsNotifCenter = KaPostsNotificationCenter.shared
+    // Surfaces the Nextcloud silent auto-restore's one-line result ("Restored N messages...")
+    // as a toast over whatever tab is showing - the automatic path has no modal by design.
+    @ObservedObject private var nextcloudService = NextcloudService.shared
+
+    /// The Kaspa mark, pre-rendered at tab-bar size.
+    ///
+    /// UIKit's tab bar takes the tabItem's image and draws it at the image's OWN size - SwiftUI
+    /// frame modifiers on it are ignored, which is why `.resizable().frame(22)` changed nothing
+    /// and the mark still towered over the SF Symbols beside it. The only thing the bar honours
+    /// is the image it is given, so the resize happens here, once, before it ever gets there.
+    ///
+    /// Drawn as a template so the tab bar's own selected/unselected tint applies, exactly as it
+    /// does to the symbols, and aspect-fitted rather than squashed into the square.
+    private static let dockKaspaLogo: Image? = {
+        guard let source = UIImage(named: "KaspaLogo") else { return nil }
+        let side: CGFloat = 24
+        let scale = min(side / max(source.size.width, 1), side / max(source.size.height, 1))
+        let fitted = CGSize(width: source.size.width * scale, height: source.size.height * scale)
+        let origin = CGPoint(x: (side - fitted.width) / 2, y: (side - fitted.height) / 2)
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+            source.draw(in: CGRect(origin: origin, size: fitted))
+        }
+        return Image(uiImage: rendered.withRenderingMode(.alwaysTemplate))
+    }()
+
+
+    /// The dock's TabView on its own, so `body` stays small enough for the type checker.
+    /// A new dock arrangement builds a fresh tab bar: reordering the same TabView left UIKit's
+    /// tab items with the image of whatever tab held that slot before (Portfolio showing
+    /// KaPosts' pencil after Customize Dock) - the titles updated, the images did not. The key
+    /// changes only when the arrangement does.
+    private var dockTabView: some View {
+        TabView(selection: tabSelection) {
+            ForEach(AppTab.visible(from: settingsViewModel.settings)) { tab in
+                tabContent(for: tab)
+                    .tabItem {
+                        // Single Label whose VALUES vary (no structural if) - conditional tabItem
+                        // content churns the tab bar's identity on every render.
+                        Label {
+                            Text(tab.label)
+                        } icon: {
+                            // Values vary, structure does not - the comment above is why this is
+                            // one Label with a varying image rather than two Labels behind an if.
+                            if tab.usesKaspaLogo, let logo = Self.dockKaspaLogo {
+                                logo
+                            } else if tab == .chess {
+                                Image(uiImage: ChessTabIcon.image(side: 24))
+                            } else if tab == .kachatNames {
+                                Image(uiImage: KachatTabIcon.image(side: 24))
+                            } else {
+                                Image(systemName: tab.icon)
+                            }
+                        }
+                    }
+                    // Profile hosts the notification bell, and KaPosts hosts its own - each
+                    // shows how many are waiting. Whether KaPosts is IN the dock is the user's
+                    // arrangement; when it is not, the count still waits on its own bell.
+                    .badge(dockBadge(for: tab))
+                    .tag(tab.tag)
+            }
+        }
+        .tint(.accentColor)
+        .id(dockArrangementKey)
+    }
+
+    private var dockArrangementKey: String {
+        AppTab.visible(from: settingsViewModel.settings).map(\.rawValue).joined(separator: ",")
+    }
+
+    var body: some View {
+        dockTabView
+        // the bell has something unread: Profile's dock dot, from whichever tab is showing. Its
+        // own modifier: inline, these pushed the body past what the type checker can solve.
+        .modifier(ProfileDockDotSync(selectedTab: selectedTab, dockTabs: AppTab.visible(from: settingsViewModel.settings)))
+        // a .kachat registration in flight: its progress half sheet, back up after a relaunch
+        .modifier(KachatRegistrationPresenter())
+        .toast(message: nextcloudService.syncStatusToast)
+        .onAppear {
+            LaunchTrace.mark("main tabs on screen")
+            // A hold with no guide to release it would strand the account: the branches below
+            // that DON'T present a guide lift it explicitly, and this covers every other path in.
+            if chatService.onboardingSyncHeld && !showWelcomeGuide && !walletManager.justCreatedNewWallet {
+                chatService.releaseSyncForOnboarding()
+            }
+            chatService.startPolling()
+            preloadProfileResources()
+            // A notification tapped from a cold start routed before this view existed - replay
+            // its tab switch now that there's something to switch.
+            consumePendingNotificationRoute()
+            // Warm the portfolio view model: its init fetches the price and publishes the
+            // Home Screen widget snapshot - without this, the widget stays empty until the
+            // user first visits the Portfolio tab.
+            _ = PortfolioViewModel.shared
+            if walletManager.justCreatedNewWallet {
+                walletManager.justCreatedNewWallet = false
+                // Persisted BEFORE presenting: justCreatedNewWallet is in-memory only, so an
+                // app kill mid-wizard would otherwise be a permanent way past the mandatory
+                // Adult/Child step - the pending markers make the next launch re-present it.
+                // The onboarding-run marker covers devices where Adult/Child was already
+                // answered for a prior account ("chosen" never downgrades), so an interrupted
+                // IMPORT wizard re-presents exactly like an interrupted create does.
+                WelcomeGuideView.markUserTypePending()
+                WelcomeGuideView.markOnboardingRunPending()
+                showWelcomeGuide = true
+            } else if WelcomeGuideView.isUserTypePending {
+                // First-run guide was interrupted before the Adult/Child choice: bring the
+                // wizard back at that step, on every launch, until it's answered.
+                resumeGuideAtUserType = true
+                showWelcomeGuide = true
+            } else if WelcomeGuideView.isOnboardingRunPending {
+                // Onboarding run interrupted AFTER the Adult/Child choice was already settled
+                // (e.g. an import on a device that answered it for a prior account): re-present
+                // the full guide from the top, still as an unskippable onboarding run.
+                showWelcomeGuide = true
+            } else {
+                // No setup guide is coming, so nothing is waiting on it - lift any hold rather
+                // than leaving the account permanently unsynced.
+                chatService.releaseSyncForOnboarding()
+            }
+        }
+        .fullScreenCover(isPresented: $showInitialSyncProgress) {
+            InitialSyncProgressModal(onDismiss: { showInitialSyncProgress = false })
+        }
+        // The call screen itself is a window of its own (`CallWindowPresenter`), so no sheet up
+        // here can keep it from showing.
+        // A call tucked away and not floating as Picture in Picture: the green return bar.
+        .overlay(alignment: .top) {
+            if let call = callService.session, callService.isMinimized, !pictureInPicture.isActive {
+                CallReturnBar(call: call)
+                    .padding(.top, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .fullScreenCover(isPresented: $showWelcomeGuide) {
+            WelcomeGuideView(
+                onFinished: {
+                    showWelcomeGuide = false
+                    resumeGuideAtUserType = false
+                    // Everything the account owns starts syncing now, behind a sheet - a
+                    // half-synced chat list invites taps on chats whose history has not landed.
+                    if chatService.onboardingSyncHeld {
+                        chatService.releaseSyncForOnboarding()
+                        showInitialSyncProgress = true
+                    }
+                },
+                startAtUserType: resumeGuideAtUserType,
+                // MainTabView only ever presents the guide for account onboarding (fresh
+                // create/import or a kill/relaunch re-present) - Help replays live in
+                // ContactsView, which leaves this false. Onboarding runs are fully unskippable.
+                isOnboardingRun: true
+            )
+        }
+        // The one thing here that reacts to the wallet: a switch of address. Subscribed to that
+        // alone, rather than observing all of WalletManager for it. Uses the address the
+        // publisher delivers: @Published emits before the property changes, so reading
+        // `currentWallet` here would still see the previous wallet.
+        .onReceive(
+            WalletManager.shared.$currentWallet
+                .map { $0?.publicAddress }
+                .removeDuplicates()
+                .dropFirst()
+        ) { address in
+            if let address { ProfileView.preloadQRCode(for: address) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openChat)) { _ in
+            // To Chats wherever it lives - its dock tab or Kaspa Hub. A bare `selectedTab = 1`
+            // landed on a tab that doesn't exist when Chats isn't in the dock: a blank screen.
+            PendingTabRoute.pending = nil
+            routeToFeature(.chats)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openPublicChat)) { _ in
+            routeToPublicChats()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openKNSProfileEditor)) { _ in
+            routeToFeature(.profile)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openKaPost)) { _ in
+            routeToKaPosts()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openPortfolio)) { _ in
+            // Widget tap and spending-address receipts: land on Portfolio (its data is what the
+            // widget shows either way), or Profile when Portfolio isn't in the dock.
+            PendingTabRoute.pending = nil
+            routeToWalletTab(.portfolio)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openKachatName)) { _ in
+            // A .kachat name notification: the .kachat screen (dock or Kaspa Hub) opens the name.
+            PendingTabRoute.pending = nil
+            routeToFeature(.kachatNames)
+        }
+        // Its own modifier: added to this chain inline, it pushed the body past what the type
+        // checker can solve in reasonable time.
+        .modifier(OwnAddressSheetPresenter(target: $ownAddressSheet, onRequest: takeOwnAddressRoute))
+        // A payment request tapped or pasted anywhere: Send Kaspa with it filled in.
+        .modifier(PaymentRequestSheetPresenter())
+        .onReceive(NotificationCenter.default.publisher(for: .openColdStorage)) { _ in
+            // Cold-storage address-activity notification tapped: the Storage tab, or the next
+            // best wallet surface when it's hidden.
+            PendingTabRoute.pending = nil
+            routeToWalletTab(.coldStorage)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openGroup)) { _ in
+            selectedTab = 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCustomizeDock)) { _ in
+            showCustomizeDock = true
+        }
+        .sheet(isPresented: $showCustomizeDock) {
+            NavigationStack {
+                MenuVisibilityView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showCustomizeDock = false }
+                        }
+                    }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .localStoreLoadFailed)) { note in
+            storeLoadFailure = Self.storeFailureMessage(from: note)
+        }
+        .alert("Storage problem", isPresented: storeLoadFailureShown) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(storeLoadFailure ?? "")
+        }
+        .onChange(of: AppTab.visible(from: settingsViewModel.settings).map(\.tag)) { visibleTags in
+            // Menu toggles can remove the currently-selected page (or hand its position to
+            // another tab) mid-flight - a TabView whose selection points at a page that no longer
+            // exists renders a stuck black screen. Snap home to Chats whenever that happens.
+            if !visibleTags.contains(selectedTab) {
+                // Through the handler (not a bare @State write) so the debounced power-save
+                // machinery runs too - a bare write landed the user on Chats with node discovery
+                // paused and the poll timer dead.
+                handleTabSelectionChange(1)
+            }
+        }
+    }
+
+    /// The unread COUNT on the tabs that own one, and nothing on the rest.
+    ///
+    /// A bare dot said only "something happened". The number is the difference between
+    /// deciding to look now and deciding to look later, and the dock is where that decision
+    /// gets made - a badge with a space in it was the dot, and the space was the whole design.
+    private func dockBadge(for tab: AppTab) -> Text? {
+        AppTabBadge.dockLabel(for: tab).map { Text(verbatim: $0) }
+    }
+
+
+    @ViewBuilder
+    private func tabContent(for tab: AppTab) -> some View {
+        switch tab {
+        case .portfolio:
+            PortfolioView()
+        case .coldStorage:
+            NavigationStack {
+                ColdStorageListView()
+            }
+        case .chats:
+            // Bare ChatListView, no ZStack, no wrappers - a permanent compositing wrapper on the
+            // app's main screen was the 4.0 "lag everywhere" regression, and the slot machinery
+            // that needed one is gone now that Ecosystem holds the masked tabs.
+            ChatListView()
+        case .swap:
+            SwapView()
+        case .profile:
+            ProfileView()
+        case .kaposts:
+            KaPostsPageView()
+        case .publicChats:
+            NavigationStack {
+                PublicChatListView()
+            }
+        case .ecosystem:
+            EcosystemView()
+        case .chess:
+            ChessHomeView()
+        case .kachatNames:
+            KachatMarketView()
+        case .addressBook:
+            AddressBookView()
+        case .kachatBots:
+            KaChatBotsView()
+        case .apps:
+            NavigationStack {
+                ProfileAppsView()
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            ConnectionStatusIndicator()
+                        }
+                        ToolbarItem(placement: .principal) {
+                            BalanceToolbarLabel()
+                        }
+                    }
+            }
+        case .more:
+            // Retired: "+ More" can never be in the dock anymore (AppTab.isEnabled hard-hides
+            // it), so this page is unreachable - kept only so the switch stays exhaustive,
+            // and opaque just in case.
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+        }
+    }
+
+    private var tabSelection: Binding<Int> {
+        Binding(
+            get: { selectedTab },
+            set: { newValue in
+                handleTabSelectionChange(newValue)
+            }
+        )
+    }
+
+    private func handleTabSelectionChange(_ newValue: Int) {
+        let previousValue = selectedTab
+        selectedTab = newValue
+
+        // Re-tapping Ecosystem while inside one of its sections steps back out to the grid -
+        // the same button that got you in gets you out.
+        if previousValue == AppTab.ecosystem.tag, newValue == AppTab.ecosystem.tag {
+            EcosystemRouter.shared.closeSection()
+            return
+        }
+
+        // Off-chat-tab power saving, DEBOUNCED so rapidly flipping tabs can't thrash start/stop
+        // (which was restarting the initial sync and freezing the UI). Only the settled tab - after
+        // a short quiet period - pauses or resumes the node pool's aggressive discovery/probe loops
+        // and the fallback message-poll timer. The pool + UTXO subscription stay live, so sending,
+        // on-demand balance/history and push keep working; only background scanning stops.
+        tabWorkTask?.cancel()
+        tabWorkTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+            if newValue == AppTab.chats.tag {
+                await NodePoolService.shared.resumeDiscovery()
+                chatService.startPolling()
+            } else {
+                await NodePoolService.shared.pauseDiscovery()
+                chatService.stopPollingTimerOnly()
+            }
+        }
+    }
+
+    // MARK: - Notification routing
+
+    /// Public Chat notification or a shared room link: the rooms are the Chats screen's Public
+    /// Chats tab now. ChatListView switches to that tab on the same signals, and the rooms
+    /// screen picks up the pending channel itself.
+    private func routeToPublicChats() { selectedTab = AppTab.chats.tag }
+
+    /// KaPosts notification or a shared-post link. KaPostsView picks up the pending txid itself.
+    private func routeToKaPosts() { routeToFeature(.kaposts) }
+
+    /// Lands on a feature wherever it currently lives.
+    ///
+    /// Its own dock tab if it has one; otherwise Ecosystem with that section opened, which is
+    /// where every non-docked feature now lives. If the user has hidden the feature outright its
+    /// notifications still arrive - they are not gated on tab visibility - so this falls back to
+    /// Chats rather than leaving the tap on whatever screen happened to be open.
+    private func routeToFeature(_ feature: AppTab) {
+        let visible = AppTab.visible(from: settingsViewModel.settings)
+        if visible.contains(feature) {
+            selectedTab = feature.tag
+        } else if visible.contains(.ecosystem),
+                  AppTab.ecosystemSections(from: settingsViewModel.settings).contains(feature) {
+            EcosystemRouter.shared.openSection(feature)
+            selectedTab = AppTab.ecosystem.tag
+        } else {
+            selectedTab = AppTab.chats.tag
+        }
+    }
+
+    /// Wallet-event notifications (address activity, widget). `preferred` is the ideal tab;
+    /// when the user has hidden it, fall back to Portfolio and finally to Profile, which is
+    /// never hideable and shows the wallet's addresses and balances - so one of these always
+    /// lands somewhere the money is visible.
+    private func routeToWalletTab(_ preferred: AppTab) {
+        let visible = AppTab.visible(from: settingsViewModel.settings)
+        let target = [preferred, .portfolio, .profile].first { visible.contains($0) } ?? .profile
+        handleTabSelectionChange(target.tag)
+    }
+
+    /// Cold-start replay of a notification tap's tab switch: the tap's NotificationCenter post
+    /// is delivered before this view exists (the app is still on the loading/onboarding route),
+    /// so its tab switch is lost while the pending target survives. The destination screens
+    /// consume the target itself; this only puts the user on the tab that mounts them.
+    /// Opens the address a tapped "Received" notification named, over whatever tab is showing.
+    private func takeOwnAddressRoute() {
+        guard let address = OwnAddressRoute.pending else { return }
+        OwnAddressRoute.pending = nil
+        ownAddressSheet = OwnAddressSheetTarget(address: address)
+    }
+
+    private func consumePendingNotificationRoute() {
+        if OwnAddressRoute.pending != nil {
+            takeOwnAddressRoute()
+            return
+        }
+        if let tab = PendingTabRoute.pending {
+            PendingTabRoute.pending = nil
+            if tab == .kachatNames {
+                routeToFeature(.kachatNames)
+            } else {
+                routeToWalletTab(tab)
+            }
+            return
+        }
+        if PublicChatService.shared.pendingPublicChatNavigation != nil {
+            routeToPublicChats()
+            return
+        }
+        if KaPostsDeepLink.pendingPostTxId != nil || KaPostsDeepLink.pendingOpenNotifications {
+            routeToKaPosts()
+            return
+        }
+        if chatService.pendingChatNavigation != nil ||
+            chatService.pendingProfileAddress != nil ||
+            GroupChatService.shared.pendingGroupNavigation != nil ||
+            GroupChatService.shared.pendingGroupListNavigation {
+            selectedTab = AppTab.chats.tag
+        }
+    }
+
+    private func preloadProfileResources() {
+        guard let address = walletManager.currentWallet?.publicAddress else { return }
+        ProfileView.preloadQRCode(for: address)
+    }
+
+}
+
+#Preview {
+    MainTabView()
+        .environmentObject(WalletManager.shared)
+        .environmentObject(ContactsManager.shared)
+        .environmentObject(ChatService.shared)
+        .environmentObject(SettingsViewModel())
+        .environmentObject(PublicChatService.shared)
+}
+
+
+// MARK: - 4.0 dock wizard (what's new popup)
+
+
+
+// MARK: - Initial sync progress
+
+/// Blocking progress shown once the setup wizard finishes, while the account's first full sync
+/// runs. Nothing syncs during the wizard (see `ChatService.holdSyncForOnboarding`), so this is
+/// where all of that work actually happens - and a half-populated chat list invites taps on
+/// chats whose history has not arrived yet.
+///
+/// It is deliberately escapable. A sync can stall on a slow indexer or a bad network, and a
+/// modal with no way out would be worse than an incomplete chat list, so "Continue anyway"
+/// appears once it has been running a while.
+private struct InitialSyncProgressModal: View {
+    let onDismiss: () -> Void
+    @EnvironmentObject var chatService: ChatService
+    @State private var canSkip = false
+
+    var body: some View {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                if chatService.initialSyncPhase == .finished {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 38, weight: .medium))
+                        .foregroundColor(.green)
+                    Text("You're all set")
+                        .font(.headline)
+                    Text("Your chats and history are up to date.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Done", action: onDismiss)
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
+                } else {
+                    ProgressView().controlSize(.large)
+                    Text("Setting up your account")
+                        .font(.headline)
+                    Text(chatService.initialSyncPhase?.label ?? "Starting")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Text("Downloading everything this account has on chain. It only takes this long once.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    if canSkip {
+                        Button("Continue anyway", action: onDismiss)
+                            .font(.subheadline)
+                            .padding(.top, 6)
+                    }
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 340)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.regularMaterial)
+            )
+            .padding(.horizontal, 24)
+        }
+        .interactiveDismissDisabled(true)
+        .task {
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            canSkip = true
+        }
+    }
+}
+
+struct OwnAddressSheetTarget: Identifiable {
+    let address: String
+    var id: String { address }
+}
+
+/// One of your own addresses, opened from a tapped "Received" notification on its History tab:
+/// the chatting address, a spending address or a cold-storage address, each on the same screen
+/// you'd reach it through (Profile, Manage Addresses, Cold Storage).
+struct OwnAddressHistorySheet: View {
+    let address: String
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var walletManager: WalletManager
+
+    private enum Resolved {
+        case chatting
+        case spending(SpendingAddressEntry)
+        case cold(ColdStorageAddressEntry)
+        case unknown
+    }
+
+    @State private var resolved: Resolved?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch resolved {
+                case nil:
+                    ProgressView()
+                case .chatting?:
+                    ChattingAddressManageView(address: address)
+                case .spending(let entry)?:
+                    SpendingAddressTransactionHistoryView(entry: entry)
+                case .cold(let entry)?:
+                    ColdStorageAddressTransactionHistoryView(entry: entry)
+                case .unknown?:
+                    Text("This address isn't in this wallet any more.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task { resolved = await resolve() }
+    }
+
+    /// Which of your addresses it is, with its balance for the screen's header.
+    private func resolve() async -> Resolved {
+        let target = address.lowercased()
+        if walletManager.currentWallet?.publicAddress.lowercased() == target { return .chatting }
+        let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([address])) ?? []
+        let balance = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+        var spending = walletManager.spendingAddresses(inRange: 0..<(max(0, walletManager.maxSpendingAddressIndex) + 1))
+        if walletManager.maxQuantumAddressIndex >= 0 {
+            let base = WalletManager.quantumIndexBase
+            spending.merge(walletManager.spendingAddresses(inRange: base..<(base + walletManager.maxQuantumAddressIndex + 1))) { a, _ in a }
+        }
+        if let match = spending.first(where: { $0.value.lowercased() == target }) {
+            return .spending(SpendingAddressEntry(
+                index: match.key,
+                address: match.value,
+                balanceSompi: balance,
+                isCurrent: match.key == walletManager.currentSpendingAddressIndex
+            ))
+        }
+        let cold = ColdStorageManager.shared
+        for account in cold.accounts {
+            for index in 0...max(0, account.maxAddressIndex) {
+                if let candidate = cold.address(for: account, at: index), candidate.lowercased() == target {
+                    return .cold(ColdStorageAddressEntry(index: index, address: candidate, balanceSompi: balance))
+                }
+            }
+        }
+        return .unknown
+    }
+}
+
+/// Presents a tapped "Received" notification's address (`OwnAddressHistorySheet`) over the tabs.
+private struct OwnAddressSheetPresenter: ViewModifier {
+    @Binding var target: OwnAddressSheetTarget?
+    let onRequest: () -> Void
+    @EnvironmentObject private var settingsViewModel: SettingsViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .openOwnAddress)) { _ in
+                onRequest()
+            }
+            .sheet(item: $target) { target in
+                OwnAddressHistorySheet(address: target.address)
+                    .environmentObject(ChatService.shared)
+                    .environmentObject(settingsViewModel)
+                    .environmentObject(WalletManager.shared)
+                    .environmentObject(ContactsManager.shared)
+            }
+    }
+}
+
+/// Keeps Profile's dock dot in step with the bell (`AppTabBadge.syncProfileDot`): when the feed
+/// changes, the tab changes, the dock is rearranged, and on appear - set after the render that
+/// triggered it, so it lands on the bar SwiftUI just updated.
+private struct ProfileDockDotSync: ViewModifier {
+    @ObservedObject private var notifCenter = GlobalNotificationCenter.shared
+    let selectedTab: Int
+    let dockTabs: [AppTab]
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(notifCenter.objectWillChange) { _ in sync() }
+            .onChange(of: selectedTab) { _ in sync() }
+            .onChange(of: dockTabs) { _ in sync() }
+            .onAppear { sync() }
+    }
+
+    private func sync() {
+        let tabs = dockTabs
+        DispatchQueue.main.async { AppTabBadge.syncProfileDot(dockTabs: tabs) }
+    }
+}

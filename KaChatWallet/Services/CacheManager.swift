@@ -1,0 +1,209 @@
+import Foundation
+import UIKit
+
+/// What the app keeps on disk that it can always fetch or rebuild, and how much of it there is.
+///
+/// Deliberately excludes anything the user would lose by clearing: messages, contacts, keys and
+/// settings are not cache, however much space they take. Every category here is re-fetched or
+/// re-derived on demand, so clearing costs a little bandwidth and nothing else - which is exactly
+/// what makes it safe to offer as a button.
+@MainActor
+final class CacheManager: ObservableObject {
+    static let shared = CacheManager()
+
+    enum Category: String, CaseIterable, Identifiable {
+        case profiles
+        case webResponses
+        case temporaryFiles
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .profiles: return AppLocalization.string("Profiles")
+            case .webResponses: return AppLocalization.string("Web Responses")
+            case .temporaryFiles: return AppLocalization.string("Temporary Files")
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .profiles:
+                return AppLocalization.string("Avatars, banners and bios of your profile and of the people you see. Loaded again when you next see them.")
+            case .webResponses:
+                return AppLocalization.string("Link previews and API responses held by the system's network cache.")
+            case .temporaryFiles:
+                return AppLocalization.string("Scratch files from sending photos and voice notes. Safe to remove at any time.")
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .profiles: return "person.crop.square"
+            case .webResponses: return "globe"
+            case .temporaryFiles: return "doc"
+            }
+        }
+    }
+
+    @Published private(set) var sizes: [Category: Int64] = [:]
+    @Published private(set) var isMeasuring = false
+
+    var totalBytes: Int64 { sizes.values.reduce(0, +) }
+
+    private init() {}
+
+    /// Phone-Contacts photos KaChat cached before it stopped using the phone's Contacts
+    /// (2026-10-08). Nothing reads them any more; removed once, at launch.
+    nonisolated static func removeRetiredContactPhotos() {
+        let flag = "kachat_retired_contact_photos_removed_v1"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        if let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            try? FileManager.default.removeItem(at: root.appendingPathComponent("ContactAvatars", isDirectory: true))
+        }
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+
+    // MARK: - Locations
+
+    private var cachesRoot: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    }
+
+    /// The directories a category owns. `webResponses` has none - URLCache does not expose its
+    /// files, so it is measured and cleared through its own API instead.
+    private func directories(for category: Category) -> [URL] {
+        switch category {
+        case .profiles:
+            // the avatar and banner images, and the profile records and lookups (KachatProfileCache)
+            return [cachesRoot?.appendingPathComponent("KNSProfileImages", isDirectory: true),
+                    cachesRoot?.appendingPathComponent("KachatProfiles", isDirectory: true)].compactMap { $0 }
+        case .webResponses:
+            return []
+        case .temporaryFiles:
+            return [URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)]
+        }
+    }
+
+    // MARK: - Measuring
+
+    /// Walks every category. Off the main actor: a large image cache is thousands of files, and
+    /// sizing them on the main thread is exactly the kind of thing that stutters a settings
+    /// screen as it opens.
+    func refreshSizes() async {
+        isMeasuring = true
+        defer { isMeasuring = false }
+
+        var measured: [Category: Int64] = [:]
+        for category in Category.allCases {
+            if category == .webResponses {
+                measured[category] = Int64(URLCache.shared.currentDiskUsage)
+                continue
+            }
+            let urls = directories(for: category)
+            measured[category] = await Task.detached(priority: .utility) {
+                urls.reduce(Int64(0)) { $0 + Self.directorySize(at: $1) }
+            }.value
+        }
+        sizes = measured
+    }
+
+    /// Recursive byte total. Skips anything it cannot read rather than failing the whole walk -
+    /// a size readout is not worth an error state.
+    nonisolated private static func directorySize(at url: URL) -> Int64 {
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [
+                .totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey
+            ])
+            guard values?.isRegularFile == true else { continue }
+            let bytes = values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0
+            total += Int64(bytes)
+        }
+        return total
+    }
+
+    // MARK: - Clearing
+
+    func clear(_ category: Category) async {
+        switch category {
+        case .webResponses:
+            URLCache.shared.removeAllCachedResponses()
+        case .profiles:
+            await emptyDirectories(directories(for: category))
+            // The in-memory half has to go too, or the screen keeps showing what was just
+            // deleted from disk until the app is relaunched.
+            await resetProfilesInMemory()
+        case .temporaryFiles:
+            await emptyDirectories(directories(for: category))
+        }
+        await refreshSizes()
+    }
+
+    func clearAll() async {
+        for category in Category.allCases where category != .webResponses {
+            await emptyDirectories(directories(for: category))
+        }
+        URLCache.shared.removeAllCachedResponses()
+        await resetProfilesInMemory()
+        await refreshSizes()
+    }
+
+    /// The profile images, identity records and social lookups held in memory.
+    private func resetProfilesInMemory() async {
+        await KNSProfileImageCacheControl.resetAfterExternalPurge()
+        KachatSocialImageResolver.shared.clearAll()
+        KachatNamesRegistry.shared.clearProfileCache()
+    }
+
+    /// Removes the CONTENTS, not the directory: services hold their directory URL from init, so
+    /// deleting the folder itself would leave them writing into a path that no longer exists.
+    private func emptyDirectories(_ urls: [URL]) async {
+        await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            for url in urls {
+                guard let contents = try? fileManager.contentsOfDirectory(
+                    at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                ) else { continue }
+                for item in contents {
+                    try? fileManager.removeItem(at: item)
+                }
+            }
+        }.value
+    }
+
+    /// Audio the app wrote to tmp for playback, encoding or sharing and could not clean up
+    /// (killed mid-way, a share sheet that never completed). Anything of ours older than a day
+    /// is nobody's any more. Runs once per launch, off the main thread.
+    nonisolated static func sweepStaleTempFiles() {
+        let prefixes = ["kasia-audio", "kachat-voice", "kachat-broadcast-voice", "broadcast_rec_", "broadcast_voice_"]
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        let directory = FileManager.default.temporaryDirectory
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        var removed = 0
+        for url in items where prefixes.contains(where: { url.lastPathComponent.hasPrefix($0) }) {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            guard modified < cutoff else { continue }
+            if (try? FileManager.default.removeItem(at: url)) != nil { removed += 1 }
+        }
+        if removed > 0 {
+            AppLog.log("%@", "[CacheManager] Removed \(removed) stale temp audio file(s)")
+        }
+    }
+
+    static func formatted(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: max(bytes, 0))
+    }
+}

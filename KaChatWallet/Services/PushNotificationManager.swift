@@ -1,0 +1,2524 @@
+import Foundation
+import Combine
+import UserNotifications
+import UIKit
+import DeviceCheck
+import CryptoKit
+import Security
+import P256K
+
+/// Manages push notification registration and indexer communication
+@MainActor
+final class PushNotificationManager: ObservableObject {
+    static let shared = PushNotificationManager()
+
+    // MARK: - Published State
+
+    @Published private(set) var isRegistered = false
+    @Published private(set) var permissionStatus: UNAuthorizationStatus = .notDetermined
+    @Published private(set) var lastError: String?
+
+    /// Number of addresses being watched for push notifications
+    var watchedAddressesCount: Int? {
+        guard isRegistered else { return nil }
+        return collectWatchedAddresses().count
+    }
+
+    // MARK: - Private State
+
+    private let tokenDefaultsKey = "push_device_token"
+    private let registeredDefaultsKey = "push_registered"
+    /// Base URL of the service the device last successfully registered with - lets a push-URL
+    /// change unregister from the OLD service (both kept pushing = duplicate notifications).
+    private let registeredBaseURLDefaultsKey = "push_registered_base_url"
+    /// APNs environment ("development"/"production") the device last successfully registered
+    /// with. A token minted for one environment is rejected by the other (`BadDeviceToken`), so
+    /// installing a TestFlight build over an Xcode build must force a FULL re-registration
+    /// rather than reusing the stale server record.
+    private let registeredApnsEnvironmentDefaultsKey = "push_registered_apns_environment"
+    /// App build the device last successfully registered from. A new build gets one FULL
+    /// registration (POST) instead of trusting the persisted "registered" flag - installing a
+    /// beta over the previous one left users with no pushes until they toggled notifications
+    /// off and on, which is exactly the unregister + register this now does by itself.
+    private let registeredBuildDefaultsKey = "push_registered_build"
+    private let legacyKasiaUnregisterDoneKey = "push_legacy_kasia_unregister_done"
+    private let deviceAuthCounterDefaultsKey = "push_device_auth_counter"
+
+    private var deviceToken: String?
+    /// The PushKit VoIP token, alongside the APNs one: the push service rings this device
+    /// through it (`/v1/push/ring`). Registered with the rest of the device record; nil until
+    /// PushKit hands one out, or after it invalidates it.
+    private(set) var voipToken: String?
+    private var pendingRegistration = false
+    private var registrationInFlight = false
+    private var lastDeviceTokenHandledAt: Date?
+    private var registrationContinuation: CheckedContinuation<Void, Error>?
+    private var registrationTimeoutTask: Task<Void, Never>?
+    private var recentlyHandledPushes: [String: Date] = [:]
+    private var retryTasks: [String: Task<Void, Never>] = [:]
+    private var updateWatchedInFlight = false
+    private var updateWatchedPending = false
+    private var updateWatchedTask: Task<Void, Never>?
+    private var lastWatchedUpdateAt: Date?
+    private var lastWatchedUpdateSuccessAt: Date?
+    private var lastWatchedSignature: String?
+    private var pendingWatchedSignature: String?
+    private var inFlightWatchedSignature: String?
+    // Backoff retry for failed watched-set updates - without it, a dropped update left the
+    // indexer's group watch-list stale until an unrelated later trigger (the "some members
+    // never get notified for some senders" bug).
+    private var watchedUpdateRetryTask: Task<Void, Never>?
+    private var watchedUpdateRetryAttempt = 0
+    private var walletBindingConflictFingerprint: String?
+    private var walletBindingConflictUntil: Date?
+    private var lastWalletBindingConflictLogAt: Date?
+    private let updateWatchedDebounce: TimeInterval = 1.0
+    private let updateWatchedSuccessCooldown: TimeInterval = 10.0
+    private let walletBindingConflictCooldown: TimeInterval = 15 * 60
+    private let walletBindingConflictLogCooldown: TimeInterval = 60
+    private var settingsObserver: NSObjectProtocol?
+    private var conversationsCancellable: AnyCancellable?
+    private var declinedContactsCancellable: AnyCancellable?
+    private var groupsCancellable: AnyCancellable?
+    private var groupMutedMembersCancellable: AnyCancellable?
+    private var groupSilentCancellable: AnyCancellable?
+
+    // MARK: - Constants
+
+    private let registrationEndpoint = "/v1/push/register"
+    private let updateEndpoint = "/v1/push/update"
+    private let unregisterEndpoint = "/v1/push/unregister"
+    private let ringEndpoint = "/v1/push/ring"
+    private let challengeEndpoint = "/v1/push/challenge"
+    private let pushAuthDomain = "kchat-push-auth:v1"
+    private let pushDeviceAuthDomain = "kchat-push-device-auth:v1"
+    private let pushDeviceAuthScheme = "device_key_v1"
+
+    // MARK: - Initialization
+
+    private init() {
+        loadPersistedState()
+        observeSettingsChanges()
+        observeConversationVisibilityChanges()
+        Task {
+            await checkPermissionStatus()
+        }
+    }
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+        conversationsCancellable?.cancel()
+        declinedContactsCancellable?.cancel()
+        groupsCancellable?.cancel()
+        groupMutedMembersCancellable?.cancel()
+        groupSilentCancellable?.cancel()
+    }
+
+    // MARK: - Public API
+
+    /// Request notification permission and register with APNs
+    func requestPermissionAndRegister() async throws {
+        let center = UNUserNotificationCenter.current()
+
+        // Request permission
+        let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+
+        await MainActor.run {
+            permissionStatus = granted ? .authorized : .denied
+        }
+
+        guard granted else {
+            throw PushError.permissionDenied
+        }
+
+        // Register with APNs - this will trigger didRegisterForRemoteNotifications
+        pendingRegistration = true
+        UIApplication.shared.registerForRemoteNotifications()
+
+        AppLog.log("[Push] Requested APNs registration")
+    }
+
+    /// Request permission, register with APNs, and wait for indexer registration.
+    func requestPermissionAndRegisterAndWaitForIndexer() async throws {
+        let center = UNUserNotificationCenter.current()
+
+        let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+
+        await MainActor.run {
+            permissionStatus = granted ? .authorized : .denied
+        }
+
+        guard granted else {
+            throw PushError.permissionDenied
+        }
+
+        guard registrationContinuation == nil else {
+            throw PushError.registrationInProgress
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            registrationContinuation = continuation
+            pendingRegistration = true
+
+            registrationTimeoutTask?.cancel()
+            registrationTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                await MainActor.run {
+                    self?.completeRegistration(with: PushError.registrationTimedOut)
+                }
+            }
+
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    /// False when this network has no usable push service address (testnet until its indexer
+    /// is published). Every push-service call is skipped then: a blank base would otherwise
+    /// produce path-only requests that iOS rejects as "unsupported URL".
+    private var hasPushService: Bool {
+        KasiaAPIClient.isUsableBaseURL(AppSettings.load().pushIndexerURL)
+    }
+
+    func refreshRegistrationIfNeeded() {
+        let settings = AppSettings.load()
+        guard settings.notificationMode == .remotePush else { return }
+        // No push service on this network (testnet has none yet). The service this device
+        // registered with on the other network would keep pushing that network's messages
+        // here, so tell it to stop, and stay unregistered.
+        if !hasPushService {
+            Task { await leavePushServiceOfOtherNetworkIfNeeded() }
+            return
+        }
+        guard permissionStatus == .authorized || permissionStatus == .provisional else { return }
+        guard registrationContinuation == nil else { return }
+
+        if deviceToken == nil {
+            pendingRegistration = true
+            UIApplication.shared.registerForRemoteNotifications()
+            return
+        }
+
+        // Ask iOS for the current token on every refresh too (Apple's advice: once per launch).
+        // A saved token can be stale - reissued with a reinstall or an environment switch - and
+        // `didRegisterForRemoteNotifications` re-registers in full when the answer differs.
+        UIApplication.shared.registerForRemoteNotifications()
+
+        if shouldDeferRegistrationForWalletBindingConflict() {
+            return
+        }
+
+        if isRegistered {
+            Task {
+                await updateWatchedAddresses()
+            }
+            return
+        }
+
+        let watchedAddresses = collectWatchedAddresses()
+        guard !watchedAddresses.isEmpty else { return }
+
+        Task {
+            do {
+                try await registerWithIndexer()
+            } catch {
+                lastError = error.localizedDescription
+                AppLog.log("[Push] Refresh registration failed: %@", error.localizedDescription)
+                if registrationContinuation != nil {
+                    completeRegistration(with: error)
+                }
+            }
+        }
+    }
+
+    /// Force re-registration with the indexer when push reliability appears degraded.
+    func forceReregister(reason: String) async {
+        let settings = AppSettings.load()
+        guard settings.notificationMode == .remotePush else { return }
+        guard permissionStatus == .authorized || permissionStatus == .provisional else {
+            AppLog.log("[Push] Skipping forced re-registration - permission not granted")
+            return
+        }
+        guard registrationContinuation == nil else {
+            AppLog.log("[Push] Skipping forced re-registration - explicit registration flow in progress")
+            return
+        }
+
+        if deviceToken == nil {
+            pendingRegistration = true
+            UIApplication.shared.registerForRemoteNotifications()
+            AppLog.log("[Push] Forced re-registration requested (%@), refreshing APNs token", reason)
+            return
+        }
+
+        if shouldDeferRegistrationForWalletBindingConflict() {
+            return
+        }
+
+        do {
+            try await registerWithIndexer()
+            AppLog.log("[Push] Forced re-registration succeeded (%@)", reason)
+        } catch {
+            lastError = error.localizedDescription
+            AppLog.log("[Push] Forced re-registration failed (%@): %@",
+                  reason,
+                  error.localizedDescription)
+        }
+    }
+
+    /// Called from AppDelegate when APNs token received
+    /// PushKit handed out (or withdrew) the VoIP token. Persisted and pushed to the service
+    /// with the next device update - it is part of the watched signature, so the update goes
+    /// out as soon as the token changes.
+    func didUpdateVoIPToken(_ token: String?) {
+        guard token != voipToken else { return }
+        voipToken = token
+        saveVoipTokenToKeychain(token)
+        AppLog.log("[Push] VoIP token %@", token.map { "updated: \($0.prefix(8))..." } ?? "invalidated")
+        guard isRegistered else { return }
+        Task { await updateWatchedAddresses() }
+    }
+
+    /// Asks the service to ring `address`'s devices for a call this device is placing. The
+    /// request is signed like every other push call, which is how the service knows the
+    /// sender it puts in the push. `payloadHex` is the opening call message encrypted to the
+    /// contact, for the callee to decrypt on arrival (PUSH_EXTENSIONS.md §5).
+    func requestRing(to address: String, callId: String, video: Bool, kind: String, payloadHex: String) async throws {
+        guard let token = deviceToken else { throw PushError.noDeviceToken }
+        guard hasPushService else { throw PushError.noPushService }
+        let settings = AppSettings.load()
+        guard let url = URL(string: "\(settings.pushIndexerURL)\(ringEndpoint)") else {
+            throw PushError.invalidResponse
+        }
+        // The service checks a ring in its legacy shape (PUSH_EXTENSIONS.md §5): no
+        // watched_group_ids line, and the caller's own wallet address as primary_address - a
+        // ring signed like register never verified, so a sleeping phone was never woken.
+        let auth = try await buildPushAuth(
+            method: "POST",
+            path: ringEndpoint,
+            deviceToken: token,
+            watchedAddresses: [],
+            watchedGroupIds: [],
+            primaryAddress: WalletManager.shared.currentWallet?.publicAddress,
+            aliases: [],
+            includeWatchedGroupIds: false
+        )
+        let request = PushRingRequest(
+            deviceToken: token,
+            toAddress: address,
+            callId: callId,
+            video: video,
+            kind: kind,
+            payload: payloadHex,
+            timestampMs: UInt64(Date().timeIntervalSince1970 * 1000),
+            auth: auth
+        )
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        urlRequest.timeoutInterval = 15
+        let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else { throw PushError.invalidResponse }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw PushError.ringFailed(statusCode: httpResponse.statusCode, reason: parseIndexerError(from: responseData))
+        }
+    }
+
+    func didRegisterForRemoteNotifications(deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        let previousToken = self.deviceToken
+        if token == self.deviceToken,
+           let last = lastDeviceTokenHandledAt,
+           Date().timeIntervalSince(last) < 5 {
+            return
+        }
+        lastDeviceTokenHandledAt = Date()
+        self.deviceToken = token
+        if previousToken != token {
+            clearWalletBindingConflictCooldown()
+        }
+        persistDeviceToken(token)
+
+        AppLog.log("[Push] Received APNs token: %@...%@",
+              String(token.prefix(8)), String(token.suffix(8)))
+
+        // APNs handed out a DIFFERENT token while the service still holds the old one (a
+        // reinstall or an update can reissue it). Nothing else re-registers in that state -
+        // the persisted "registered" flag steered every later refresh into a PUT for the old
+        // token - so every push went to a token this device no longer has. Full register now.
+        if let previousToken, previousToken != token, isRegistered, !pendingRegistration {
+            AppLog.log("[Push] APNs token changed - re-registering with the new token")
+            isRegistered = false
+            persistRegistrationStatus(false)
+            guard !registrationInFlight else { return }
+            Task {
+                do {
+                    try await registerWithIndexer()
+                } catch {
+                    lastError = error.localizedDescription
+                    AppLog.log("[Push] Re-registration after token change failed: %@", error.localizedDescription)
+                }
+            }
+            return
+        }
+
+        // If we were waiting for registration, complete it
+        if pendingRegistration {
+            pendingRegistration = false
+            if registrationInFlight {
+                Task {
+                    await self.waitForInFlightRegistrationIfNeeded()
+                }
+                return
+            }
+            Task {
+                do {
+                    try await registerWithIndexer()
+                    await MainActor.run {
+                        self.completeRegistration()
+                    }
+                } catch {
+                    AppLog.log("[Push] Failed to register with indexer: %@", error.localizedDescription)
+                    lastError = error.localizedDescription
+                    await MainActor.run {
+                        self.completeRegistration(with: error)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Called from AppDelegate when APNs registration fails
+    func didFailToRegisterForRemoteNotifications(error: Error) {
+        AppLog.log("[Push] APNs registration failed: %@", error.localizedDescription)
+        pendingRegistration = false
+        lastError = error.localizedDescription
+        completeRegistration(with: error)
+    }
+
+    /// Register device with indexer, including watched addresses
+    func registerWithIndexer() async throws {
+        guard hasPushService else {
+            await leavePushServiceOfOtherNetworkIfNeeded()
+            throw PushError.noPushService
+        }
+        await unregisterFromSupersededServiceIfNeeded()
+        guard let token = deviceToken else {
+            throw PushError.noDeviceToken
+        }
+        guard !registrationInFlight else {
+            return
+        }
+        registrationInFlight = true
+        defer { registrationInFlight = false }
+
+        let settings = AppSettings.load()
+        let watchedAddresses = collectWatchedAddresses()
+        // nil = transient keychain failure loading a group bag; register with what we have (the
+        // retry-capable watched-update path heals the group list afterwards).
+        let watchedGroupIds = collectWatchedGroupIds() ?? []
+        let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
+        let primaryAddress = collectPrimaryAddress()
+
+        // Group ids alone are a valid registration - requiring a non-empty 1:1 list meant a user
+        // with groups but no push-eligible 1:1 chats never registered for group pushes at all.
+        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty else {
+            throw PushError.noWatchedAddresses
+        }
+
+        for attempt in 0..<2 {
+            let (statusCode, reason) = try await submitRegistrationRequest(
+                settings: settings,
+                token: token,
+                watchedAddresses: watchedAddresses,
+                watchedGroupIds: watchedGroupIds,
+                aliases: aliases,
+                primaryAddress: primaryAddress
+            )
+            if statusCode == 200 {
+                applySuccessfulRegistration(
+                    watchedAddresses: watchedAddresses,
+                    watchedGroupIds: watchedGroupIds,
+                    aliases: aliases,
+                    primaryAddress: primaryAddress
+                )
+                return
+            }
+            if isWalletBindingConflict(statusCode: statusCode, reason: reason), attempt == 0 {
+                let recovered = await attemptWalletBindingRecoveryUnregister(
+                    token: token,
+                    watchedAddresses: watchedAddresses,
+                    aliases: aliases
+                )
+                if recovered {
+                    continue
+                }
+            }
+            if isWalletBindingConflict(statusCode: statusCode, reason: reason) {
+                activateWalletBindingConflictCooldown(reason: reason)
+            }
+            throw PushError.registrationFailed(statusCode: statusCode, reason: reason)
+        }
+    }
+
+    private func submitRegistrationRequest(
+        settings: AppSettings,
+        token: String,
+        watchedAddresses: [String],
+        watchedGroupIds: [String],
+        aliases: [String],
+        primaryAddress: String?
+    ) async throws -> (Int, String?) {
+        guard let url = URL(string: "\(settings.pushIndexerURL)\(registrationEndpoint)") else {
+            AppLog.log("[Push] Invalid push service URL: %@", settings.pushIndexerURL)
+            throw PushError.invalidResponse
+        }
+        let auth = try await buildPushAuth(
+            method: "POST",
+            path: registrationEndpoint,
+            deviceToken: token,
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            primaryAddress: primaryAddress,
+            aliases: aliases
+        )
+
+        #if targetEnvironment(macCatalyst)
+        let platform = "macos"
+        #else
+        let platform = "ios"
+        #endif
+
+        let kinds = AppSettings.load()
+        let request = PushRegistrationRequest(
+            deviceToken: token,
+            platform: platform,
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            watchedPublicChatChannels: collectWatchedPublicChatChannels(),
+            hiddenPublicChatSenders: collectHiddenPublicChatSenders(),
+            kapostsPubkey: collectKaPostsPubkey(),
+            kapostsNotifyLikes: kinds.kaPostsNotifyLikes,
+            kapostsNotifyDislikes: kinds.kaPostsNotifyDislikes,
+            kapostsNotifyComments: kinds.kaPostsNotifyComments,
+            kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
+            kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
+            kapostsWatchAuthors: collectKaPostsWatchAuthors(),
+            primaryAddress: primaryAddress,
+            aliases: aliases,
+            apnsEnvironment: ApnsEnvironment.current.rawValue,
+            voipToken: voipToken,
+            auth: auth
+        )
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        urlRequest.timeoutInterval = 30
+
+        let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PushError.invalidResponse
+        }
+        let reason = parseIndexerError(from: responseData)
+        return (httpResponse.statusCode, reason)
+    }
+
+    private func applySuccessfulRegistration(
+        watchedAddresses: [String],
+        watchedGroupIds: [String],
+        aliases: [String],
+        primaryAddress: String?
+    ) {
+        isRegistered = true
+        lastError = nil
+        persistRegistrationStatus(true)
+        UserDefaults.standard.set(AppSettings.load().pushIndexerURL, forKey: registeredBaseURLDefaultsKey)
+        UserDefaults.standard.set(ApnsEnvironment.current.rawValue, forKey: registeredApnsEnvironmentDefaultsKey)
+        UserDefaults.standard.set(Self.currentBuildIdentifier, forKey: registeredBuildDefaultsKey)
+        clearWalletBindingConflictCooldown()
+        lastWatchedSignature = buildWatchedSignature(
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            aliases: aliases,
+            primaryAddress: primaryAddress
+        )
+        lastWatchedUpdateSuccessAt = Date()
+        pendingWatchedSignature = nil
+        inFlightWatchedSignature = nil
+
+        SharedDataManager.syncContactsForExtension()
+
+        AppLog.log("[Push] Registered with indexer, watching %d addresses", watchedAddresses.count)
+        if registrationContinuation != nil {
+            completeRegistration()
+        }
+    }
+
+    private func attemptWalletBindingRecoveryUnregister(
+        token: String,
+        watchedAddresses: [String],
+        aliases: [String]
+    ) async -> Bool {
+        let settings = AppSettings.load()
+        guard hasPushService,
+              let url = URL(string: "\(settings.pushIndexerURL)\(unregisterEndpoint)") else {
+            return false
+        }
+
+        let auth: PushAuthRequest?
+        do {
+            auth = try await buildPushAuth(
+                method: "DELETE",
+                path: unregisterEndpoint,
+                deviceToken: token,
+                watchedAddresses: watchedAddresses,
+                watchedGroupIds: [],
+                primaryAddress: nil,
+                aliases: aliases
+            )
+        } catch {
+            AppLog.log("[Push] Recovery unregister auth build failed: %@", error.localizedDescription)
+            return false
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "DELETE"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try? JSONEncoder().encode(
+            PushUnregisterRequest(deviceToken: token, auth: auth)
+        )
+        urlRequest.timeoutInterval = 30
+
+        do {
+            let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            if httpResponse.statusCode == 200 {
+                isRegistered = false
+                persistRegistrationStatus(false)
+                AppLog.log("[Push] Recovery unregister succeeded, retrying register")
+                return true
+            }
+            let reason = parseIndexerError(from: responseData) ?? "unknown"
+            AppLog.log("[Push] Recovery unregister failed: status=%d reason=%@", httpResponse.statusCode, reason)
+            return false
+        } catch {
+            AppLog.log("[Push] Recovery unregister error: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    private func waitForInFlightRegistrationIfNeeded() async {
+        // Another registration attempt is already in-flight. Wait for it to settle so the
+        // explicit "register and wait" path doesn't falsely time out.
+        for _ in 0..<120 {
+            if !registrationInFlight {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        guard registrationContinuation != nil else { return }
+        if registrationInFlight {
+            return
+        }
+        if isRegistered {
+            completeRegistration()
+            return
+        }
+        if let lastError {
+            completeRegistration(with: PushError.authFailed(reason: lastError))
+        }
+    }
+
+    private func completeRegistration(with error: Error? = nil) {
+        pendingRegistration = false
+        registrationTimeoutTask?.cancel()
+        registrationTimeoutTask = nil
+
+        guard let continuation = registrationContinuation else { return }
+        registrationContinuation = nil
+
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume()
+        }
+    }
+
+    /// Update watched addresses (call when contacts change)
+    func updateWatchedAddresses() async {
+        guard deviceToken != nil else { return }
+        guard hasPushService else { return }
+
+        if !isRegistered {
+            let watchedAddresses = collectWatchedAddresses()
+            guard !watchedAddresses.isEmpty else { return }
+            if shouldDeferRegistrationForWalletBindingConflict() {
+                return
+            }
+            do {
+                try await registerWithIndexer()
+            } catch {
+                lastError = error.localizedDescription
+                AppLog.log("[Push] Failed to register with indexer while updating watched addresses: %@",
+                      error.localizedDescription)
+                if registrationContinuation != nil {
+                    completeRegistration(with: error)
+                }
+            }
+            return
+        }
+
+        if updateWatchedInFlight || updateWatchedTask != nil {
+            updateWatchedPending = true
+            pendingWatchedSignature = buildWatchedSignature()
+            return
+        }
+
+        let now = Date()
+        if let last = lastWatchedUpdateAt,
+           now.timeIntervalSince(last) < updateWatchedDebounce {
+            updateWatchedPending = true
+            pendingWatchedSignature = buildWatchedSignature()
+            if updateWatchedTask == nil {
+                let delay = updateWatchedDebounce - now.timeIntervalSince(last)
+                updateWatchedTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    await self?.runWatchedUpdate(fromDebounceTask: true)
+                }
+            }
+            return
+        }
+        let signature = buildWatchedSignature()
+        if let lastSig = lastWatchedSignature,
+           signature == lastSig,
+           let lastSuccess = lastWatchedUpdateSuccessAt,
+           now.timeIntervalSince(lastSuccess) < updateWatchedSuccessCooldown {
+            return
+        }
+
+        lastWatchedUpdateAt = now
+        pendingWatchedSignature = signature
+        await runWatchedUpdate()
+    }
+
+    private func runWatchedUpdate(fromDebounceTask: Bool = false) async {
+        guard let token = deviceToken, isRegistered else {
+            updateWatchedPending = false
+            return
+        }
+        // CRITICAL: when running INSIDE the debounce task, do NOT cancel it - cancelling the very
+        // task this code executes in poisons the subsequent URLSession call (it throws .cancelled),
+        // which silently dropped every debounced update. Roster changes emit in bursts, so group
+        // watch-list updates were routinely lost this way (members missing pushes per-sender).
+        if fromDebounceTask {
+            updateWatchedTask = nil
+        } else {
+            updateWatchedTask?.cancel()
+            updateWatchedTask = nil
+        }
+        if updateWatchedInFlight {
+            updateWatchedPending = true
+            return
+        }
+        updateWatchedInFlight = true
+        defer {
+            updateWatchedInFlight = false
+        }
+
+        let settings = AppSettings.load()
+        let watchedAddresses = collectWatchedAddresses()
+        // nil = a group bag failed to load (transient keychain hiccup). Abort + retry rather than
+        // submit a truncated list - the indexer treats the update as a full replace, so a partial
+        // list silently DELETES the missing groups' subscriptions server-side.
+        guard let watchedGroupIds = collectWatchedGroupIds() else {
+            AppLog.log("[Push] Group bag read failed - skipping watched update to avoid truncating server list; will retry")
+            inFlightWatchedSignature = nil
+            scheduleWatchedUpdateRetry()
+            return
+        }
+        let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
+        let primaryAddress = collectPrimaryAddress()
+        // Only unregister when there is NOTHING left to watch. Group ids alone are a valid
+        // registration - unregistering whenever the 1:1 list was empty killed ALL group pushes for
+        // users with groups but no push-eligible 1:1 chats.
+        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty {
+            AppLog.log("[Push] No eligible chats for push, unregistering device from indexer")
+            await unregister()
+            lastWatchedSignature = ""
+            lastWatchedUpdateSuccessAt = Date()
+            pendingWatchedSignature = nil
+            inFlightWatchedSignature = nil
+            updateWatchedPending = false
+            return
+        }
+        let signature = buildWatchedSignature(
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            aliases: aliases,
+            primaryAddress: primaryAddress
+        )
+        inFlightWatchedSignature = signature
+
+        let auth: PushAuthRequest
+        do {
+            auth = try await buildPushAuth(
+                method: "PUT",
+                path: updateEndpoint,
+                deviceToken: token,
+                watchedAddresses: watchedAddresses,
+                watchedGroupIds: watchedGroupIds,
+                primaryAddress: primaryAddress,
+                aliases: aliases
+            )
+        } catch {
+            lastError = error.localizedDescription
+            AppLog.log("[Push] Failed to build auth for watched update: %@", error.localizedDescription)
+            inFlightWatchedSignature = nil
+            scheduleWatchedUpdateRetry()
+            return
+        }
+
+        let kinds = AppSettings.load()
+        let request = PushUpdateRequest(
+            deviceToken: token,
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            watchedPublicChatChannels: collectWatchedPublicChatChannels(),
+            hiddenPublicChatSenders: collectHiddenPublicChatSenders(),
+            kapostsPubkey: collectKaPostsPubkey(),
+            kapostsNotifyLikes: kinds.kaPostsNotifyLikes,
+            kapostsNotifyDislikes: kinds.kaPostsNotifyDislikes,
+            kapostsNotifyComments: kinds.kaPostsNotifyComments,
+            kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
+            kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
+            kapostsWatchAuthors: collectKaPostsWatchAuthors(),
+            primaryAddress: primaryAddress,
+            aliases: aliases,
+            apnsEnvironment: ApnsEnvironment.current.rawValue,
+            voipToken: voipToken,
+            auth: auth
+        )
+
+        guard let url = URL(string: "\(settings.pushIndexerURL)\(updateEndpoint)") else {
+            AppLog.log("[Push] Invalid push service URL: %@", settings.pushIndexerURL)
+            inFlightWatchedSignature = nil
+            return
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "PUT"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try? JSONEncoder().encode(request)
+        urlRequest.timeoutInterval = 30
+
+        do {
+            let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                AppLog.log("[Push] Failed to update watched addresses: invalid response")
+                inFlightWatchedSignature = nil
+                scheduleWatchedUpdateRetry()
+                return
+            }
+            guard httpResponse.statusCode == 200 else {
+                let reason = parseIndexerError(from: responseData) ?? "unknown"
+                if isWalletBindingConflict(statusCode: httpResponse.statusCode, reason: reason) {
+                    let recovered = await attemptWalletBindingRecoveryUnregister(
+                        token: token,
+                        watchedAddresses: watchedAddresses,
+                        aliases: aliases
+                    )
+                    if recovered {
+                        do {
+                            try await registerWithIndexer()
+                        } catch {
+                            lastError = error.localizedDescription
+                        }
+                        return
+                    }
+                    activateWalletBindingConflictCooldown(reason: reason)
+                    return
+                }
+                if httpResponse.statusCode == 404 {
+                    // The service does not know this device any more - a PUT can never fix
+                    // that, and retrying it on a backoff only kept the pushes dead. Register
+                    // from scratch.
+                    AppLog.log("[Push] Watched update answered 404 - device unknown to the service, re-registering")
+                    inFlightWatchedSignature = nil
+                    isRegistered = false
+                    persistRegistrationStatus(false)
+                    do {
+                        try await registerWithIndexer()
+                    } catch {
+                        lastError = error.localizedDescription
+                        AppLog.log("[Push] Re-registration after 404 failed: %@", error.localizedDescription)
+                    }
+                    return
+                }
+                AppLog.log("[Push] Failed to update watched addresses: status=%d reason=%@", httpResponse.statusCode, reason)
+                inFlightWatchedSignature = nil
+                scheduleWatchedUpdateRetry()
+                return
+            }
+
+            // Sync contacts to shared container
+            SharedDataManager.syncContactsForExtension()
+
+            lastWatchedSignature = signature
+            lastWatchedUpdateSuccessAt = Date()
+            // Success - reset the failure backoff.
+            watchedUpdateRetryAttempt = 0
+            watchedUpdateRetryTask?.cancel()
+            watchedUpdateRetryTask = nil
+            AppLog.log("[Push] Updated watched addresses: %d (+%d group ids)", watchedAddresses.count, watchedGroupIds.count)
+        } catch {
+            AppLog.log("[Push] Error updating addresses: %@", error.localizedDescription)
+            inFlightWatchedSignature = nil
+            scheduleWatchedUpdateRetry()
+        }
+
+        if updateWatchedPending {
+            updateWatchedPending = false
+            lastWatchedUpdateAt = Date()
+            let nextSignature = pendingWatchedSignature
+            pendingWatchedSignature = nil
+            if let nextSignature,
+               nextSignature != lastWatchedSignature,
+               nextSignature != inFlightWatchedSignature {
+                await runWatchedUpdate()
+            }
+        }
+    }
+
+    /// Backoff retry (5s / 30s / 2min, capped) for a failed watched-set update. Previously a failed
+    /// update was never retried - the drain block only re-runs on a DIFFERENT pending signature - so
+    /// one network hiccup left the indexer's watch list stale until an unrelated trigger.
+    private func scheduleWatchedUpdateRetry() {
+        updateWatchedPending = false
+        watchedUpdateRetryTask?.cancel()
+        let delays: [TimeInterval] = [5, 30, 120]
+        let delay = delays[min(watchedUpdateRetryAttempt, delays.count - 1)]
+        watchedUpdateRetryAttempt += 1
+        AppLog.log("[Push] Scheduling watched-update retry #%d in %.0fs", watchedUpdateRetryAttempt, delay)
+        watchedUpdateRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.runWatchedUpdate()
+        }
+    }
+
+    private func buildWatchedSignature(
+        watchedAddresses: [String]? = nil,
+        watchedGroupIds: [String]? = nil,
+        aliases: [String]? = nil,
+        primaryAddress: String? = nil
+    ) -> String {
+        let addrs = (watchedAddresses ?? collectWatchedAddresses()).sorted()
+        let groupIds = (watchedGroupIds ?? collectWatchedGroupIds() ?? []).sorted()
+        let aliasList = (aliases ?? collectAliases(forWatchedAddresses: addrs)).sorted()
+        let primary = primaryAddress ?? collectPrimaryAddress() ?? ""
+        let publicChatChannels = collectWatchedPublicChatChannels()
+        let kapostsKey = collectKaPostsPubkey() ?? ""
+        let watchAuthors = collectKaPostsWatchAuthors().sorted().joined(separator: "+")
+        let hiddenPublicChat = collectHiddenPublicChatSenders()
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value.joined(separator: "+"))" }
+        let apnsEnvironment = ApnsEnvironment.current.rawValue
+        let voip = voipToken ?? ""
+        // The KaPosts switches and the silenced groups are part of what the service holds for
+        // this device, so a change to either is a change worth an update even when the forced
+        // re-registration behind the switch could not run (permission, wallet-binding cooldown).
+        let kinds = AppSettings.load()
+        let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows]
+            .map { $0 ? "1" : "0" }.joined()
+        let silentGroups = GroupChatService.shared.groupSilentNotifications.sorted().joined(separator: "+")
+        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors]).joined(separator: ",")
+    }
+
+    /// Unregister device (call on logout/wallet delete)
+    /// The push URL changed (e.g. the kasia.wtf -> kachat.duckdns.org default migration) but
+    /// the OLD service still has this device registered and keeps pushing - the source of
+    /// duplicated notifications. One best-effort DELETE against the old base before
+    /// registering with the new one; unsigned (legacy backends accept it), single attempt.
+    private func unregisterFromSupersededServiceIfNeeded() async {
+        guard let token = deviceToken else { return }
+        let currentBase = AppSettings.load().pushIndexerURL
+        var storedOldBase = UserDefaults.standard.string(forKey: registeredBaseURLDefaultsKey)
+        // Devices that migrated BEFORE base-URL tracking existed (the kasia.wtf ->
+        // kachat.duckdns.org default flip) have no stored value - sweep the known legacy
+        // host once so it stops double-pushing.
+        if storedOldBase == nil,
+           !UserDefaults.standard.bool(forKey: legacyKasiaUnregisterDoneKey),
+           UserDefaults.standard.bool(forKey: registeredDefaultsKey) {
+            storedOldBase = "https://indexer.kasia.wtf"
+        }
+        UserDefaults.standard.set(true, forKey: legacyKasiaUnregisterDoneKey)
+        guard let oldBase = storedOldBase,
+              !oldBase.isEmpty,
+              oldBase != currentBase,
+              let url = URL(string: "\(oldBase)\(unregisterEndpoint)") else { return }
+        // Clear first - one attempt per supersession, a dead old host must not retry forever.
+        UserDefaults.standard.removeObject(forKey: registeredBaseURLDefaultsKey)
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "DELETE"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try? JSONEncoder().encode(PushUnregisterRequest(deviceToken: token, auth: nil))
+        urlRequest.timeoutInterval = 20
+        _ = try? await URLSession.shared.data(for: urlRequest)
+        AppLog.log("[Push] Sent unregister to superseded push service: %@", oldBase)
+    }
+
+    /// On a network with no push service: one DELETE to the service the device last registered
+    /// with (unsigned - the signed form binds the address of the network being left, and this
+    /// one is the other encoding), then the device counts as unregistered. Messages that still
+    /// arrive from it are dropped by the network check in the extension and the app.
+    private func leavePushServiceOfOtherNetworkIfNeeded() async {
+        let defaults = UserDefaults.standard
+        let registeredBase = defaults.string(forKey: registeredBaseURLDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if isRegistered || defaults.bool(forKey: registeredDefaultsKey) {
+            isRegistered = false
+            persistRegistrationStatus(false)
+        }
+        guard !registeredBase.isEmpty else { return }
+        defaults.removeObject(forKey: registeredBaseURLDefaultsKey)
+        guard let token = deviceToken,
+              let url = URL(string: "\(registeredBase)\(unregisterEndpoint)") else { return }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "DELETE"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try? JSONEncoder().encode(PushUnregisterRequest(deviceToken: token, auth: nil))
+        urlRequest.timeoutInterval = 20
+        _ = try? await URLSession.shared.data(for: urlRequest)
+        AppLog.log("[Push] No push service on this network; sent unregister to %@", registeredBase)
+    }
+
+    func unregister() async {
+        guard let token = deviceToken else { return }
+        guard hasPushService else {
+            await leavePushServiceOfOtherNetworkIfNeeded()
+            return
+        }
+
+        let settings = AppSettings.load()
+
+        guard let url = URL(string: "\(settings.pushIndexerURL)\(unregisterEndpoint)") else {
+            AppLog.log("[Push] Invalid push service URL: %@", settings.pushIndexerURL)
+            return
+        }
+
+        do {
+            let auth: PushAuthRequest?
+            do {
+                auth = try await buildPushAuth(
+                    method: "DELETE",
+                    path: unregisterEndpoint,
+                    deviceToken: token,
+                    watchedAddresses: [],
+                    watchedGroupIds: [],
+                    primaryAddress: nil,
+                    aliases: []
+                )
+            } catch {
+                // Best-effort fallback for mixed/legacy backend mode.
+                AppLog.log("[Push] Failed to build auth for unregister, trying unsigned request: %@", error.localizedDescription)
+                auth = nil
+            }
+
+            var urlRequest = URLRequest(url: url)
+            urlRequest.httpMethod = "DELETE"
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = try JSONEncoder().encode(
+                PushUnregisterRequest(deviceToken: token, auth: auth)
+            )
+            urlRequest.timeoutInterval = 30
+
+            let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                AppLog.log("[Push] Error unregistering: invalid response")
+                return
+            }
+            if httpResponse.statusCode == 200 {
+                isRegistered = false
+                persistRegistrationStatus(false)
+                lastError = nil
+                clearWalletBindingConflictCooldown()
+                AppLog.log("[Push] Unregistered from indexer")
+                return
+            }
+
+            let reason = parseIndexerError(from: responseData) ?? "unknown"
+            if isWalletBindingConflict(statusCode: httpResponse.statusCode, reason: reason) {
+                activateWalletBindingConflictCooldown(reason: reason)
+            }
+            if (400...499).contains(httpResponse.statusCode) {
+                // Local token/state is stale or invalid for this backend; stop retry loops.
+                isRegistered = false
+                persistRegistrationStatus(false)
+            }
+            AppLog.log("[Push] Failed to unregister: status=%d reason=%@", httpResponse.statusCode, reason)
+        } catch {
+            AppLog.log("[Push] Error unregistering: %@", error.localizedDescription)
+        }
+    }
+
+    /// Process pending messages stored by notification extension
+    func processPendingMessages() async {
+        // Decrypted messages an older notification extension stored in plain text (it no longer
+        // does - IOS-051): processed once, then only those entries removed (IOS-052).
+        let storedMessages = SharedDataManager.getStoredMessages()
+        if !storedMessages.isEmpty {
+            AppLog.log("[Push] Processing %d messages from extension", storedMessages.count)
+
+            for msg in storedMessages {
+                // Add to ChatService if not already present
+                if let txId = msg["txId"] as? String,
+                   let sender = msg["sender"] as? String,
+                   let content = msg["content"] as? String,
+                   let timestamp = msg["timestamp"] as? Int64 {
+                    ChatService.shared.recordRemotePushDelivery(
+                        txId: txId,
+                        sender: sender,
+                        messageType: "contextual"
+                    )
+                    await ChatService.shared.addMessageFromPush(
+                        txId: txId,
+                        sender: sender,
+                        content: content,
+                        timestamp: timestamp
+                    )
+                }
+            }
+
+            SharedDataManager.removeStoredMessages(txIds: Set(storedMessages.compactMap { $0["txId"] as? String }))
+        }
+
+        // Get pending messages that need fetching (large payloads, and every 1:1 message the
+        // extension decrypted for its banner)
+        let pendingMessages = SharedDataManager.getPendingMessages()
+        if !pendingMessages.isEmpty {
+            AppLog.log("[Push] Fetching %d pending messages", pendingMessages.count)
+
+            // Group pushes (`NotificationService.handleGroupPush`) always add a pending entry
+            // with `sender: "group"` regardless of whether the NSE already decrypted and showed
+            // it, since there's no single-txId REST fetch for a group message the way 1:1 has
+            // `fetchMessageByTxId`. Routing them through that 1:1-only call below with a literal
+            // "group" sender always silently fails - the message never lands in the group
+            // thread even though its notification banner showed correctly. Group catch-up sync
+            // (cursor-based, already run separately every app-active) is the real mechanism that
+            // persists these, so just make sure it runs and drop these from the retry queue
+            // rather than repeatedly failing the same bogus 1:1 fetch.
+            let hasGroupPending = pendingMessages.contains { $0.type == "group_message" || $0.type == "group_control" }
+            if hasGroupPending {
+                await GroupChatService.shared.performCatchUpSync()
+            }
+
+            var failed: [SharedPendingMessage] = []
+            for pending in pendingMessages {
+                if pending.type == "group_message" || pending.type == "group_control" {
+                    continue
+                }
+                ChatService.shared.recordRemotePushDelivery(
+                    txId: pending.txId,
+                    sender: pending.sender,
+                    messageType: pending.type
+                )
+                let fetched: Bool
+                if pending.type == "payment" {
+                    fetched = await ChatService.shared.fetchPaymentByTxId(
+                        pending.txId,
+                        sender: pending.sender,
+                        amount: nil,
+                        timestamp: pending.timestamp
+                    )
+                } else {
+                    fetched = await ChatService.shared.fetchMessageByTxId(pending.txId, sender: pending.sender)
+                }
+                if !fetched {
+                    failed.append(pending)
+                }
+            }
+
+            SharedDataManager.setPendingMessages(failed)
+        }
+    }
+
+    /// Handle an incoming remote push payload and update chats immediately.
+    /// Serializes group catch-up syncs triggered by pushes: only one runs at a time, and if more
+    /// group pushes arrive while one is in flight, exactly one more sync runs afterward (so the later
+    /// messages are still fetched) instead of stacking N overlapping full syncs.
+    private var groupCatchUpInFlight = false
+    private var groupCatchUpNeedsRerun = false
+
+    /// One catch-up at a time; a request during one queues exactly one more.
+    func runGroupCatchUp() async {
+        if groupCatchUpInFlight {
+            groupCatchUpNeedsRerun = true
+            return
+        }
+        groupCatchUpInFlight = true
+        repeat {
+            groupCatchUpNeedsRerun = false
+            await GroupChatService.shared.performCatchUpSync()
+        } while groupCatchUpNeedsRerun
+        groupCatchUpInFlight = false
+    }
+
+    func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> Bool {
+        let settings = AppSettings.load()
+        guard settings.notificationMode == .remotePush else { return false }
+
+        guard let txId = userInfo["tx_id"] as? String,
+              let sender = userInfo["sender"] as? String,
+              let messageType = userInfo["type"] as? String else {
+            return false
+        }
+
+        ChatService.shared.recordRemotePushDelivery(
+            txId: txId,
+            sender: sender,
+            messageType: messageType
+        )
+
+        pruneRecentlyHandledPushes()
+        if let lastHandled = recentlyHandledPushes[txId], Date().timeIntervalSince(lastHandled) < 60 {
+            AppLog.log("[Push] Remote push already handled recently: %@", txId)
+            return true
+        }
+
+        let timestamp = extractTimestamp(userInfo: userInfo)
+        let payload = userInfo["payload"] as? String
+        let amount = extractAmount(userInfo: userInfo)
+
+        if messageType == "payment" {
+            if let ourAddress = WalletManager.shared.currentWallet?.publicAddress,
+               sender == ourAddress,
+               await ChatService.shared.hasLocalMessage(txId: txId) {
+                AppLog.log("[Push] Outgoing payment already in local messages: %@", txId)
+                return true
+            }
+
+            if await ChatService.shared.addPaymentFromPush(
+                txId: txId,
+                sender: sender,
+                amount: amount,
+                payload: payload,
+                timestamp: timestamp
+            ) {
+                AppLog.log("[Push] Remote payment handled: %@", txId)
+                recentlyHandledPushes[txId] = Date()
+                if let task = retryTasks.removeValue(forKey: txId) {
+                    task.cancel()
+                }
+                SharedDataManager.removePendingMessage(txId: txId)
+                return true
+            }
+
+            AppLog.log("[Push] Remote payment handled via fetch: %@", txId)
+            let fetched = await ChatService.shared.fetchPaymentByTxId(
+                txId,
+                sender: sender,
+                amount: amount,
+                timestamp: timestamp
+            )
+            if !fetched {
+                SharedDataManager.addPendingMessage(txId: txId, sender: sender, type: messageType)
+                AppLog.log("[Push] Remote payment fetch failed, queued for retry: %@", txId)
+                scheduleRetryFetchIfActive(txId: txId, sender: sender, type: messageType)
+                return false
+            }
+            recentlyHandledPushes[txId] = Date()
+            if let task = retryTasks.removeValue(forKey: txId) {
+                task.cancel()
+            }
+            SharedDataManager.removePendingMessage(txId: txId)
+            return true
+        }
+
+        if let ourAddress = WalletManager.shared.currentWallet?.publicAddress,
+           sender == ourAddress {
+            if await ChatService.shared.hasLocalMessage(txId: txId) {
+                AppLog.log("[Push] Outgoing push already in local messages: %@", txId)
+                return true
+            }
+            return await ChatService.shared.addOutgoingMessageFromPush(
+                txId: txId,
+                sender: sender,
+                payload: payload,
+                timestamp: timestamp
+            )
+        }
+
+        if messageType == "group_message" || messageType == "group_control" {
+            // A group push has no single-txId REST fetch - the 1:1 `fetchMessageByTxId` below always
+            // fails for a group txId, so the message would sit unloaded (and un-badged) until the next
+            // app-active catch-up. Run the cursor-based group catch-up now so the message lands in the
+            // thread promptly and drives the unread/badge count. Coalesced so a burst of group pushes
+            // doesn't stack overlapping full syncs.
+            AppLog.log("[Push] Group push -> catch-up sync: %@", txId)
+            await runGroupCatchUp()
+            recentlyHandledPushes[txId] = Date()
+            if let task = retryTasks.removeValue(forKey: txId) { task.cancel() }
+            SharedDataManager.removePendingMessage(txId: txId)
+            return true
+        }
+
+        if messageType == "contextual" {
+            if let payload {
+                AppLog.log("[Push] Remote push payload len=%d tx=%@", payload.count, txId)
+                if let content = decryptContextualPayload(payload) {
+                    AppLog.log("[Push] Remote push handled via decrypt: %@", txId)
+                    recentlyHandledPushes[txId] = Date()
+                    if let task = retryTasks.removeValue(forKey: txId) {
+                        task.cancel()
+                    }
+                    SharedDataManager.removePendingMessage(txId: txId)
+                    await ChatService.shared.addMessageFromPush(
+                        txId: txId,
+                        sender: sender,
+                        content: content,
+                        timestamp: timestamp
+                    )
+                    return true
+                }
+            } else {
+                AppLog.log("[Push] Remote push missing payload: %@", txId)
+            }
+        }
+
+        AppLog.log("[Push] Remote push handled via fetch: %@", txId)
+        let fetched = await ChatService.shared.fetchMessageByTxId(txId, sender: sender)
+        if !fetched {
+            SharedDataManager.addPendingMessage(txId: txId, sender: sender, type: messageType)
+            AppLog.log("[Push] Remote push fetch failed, queued for retry: %@", txId)
+            scheduleRetryFetchIfActive(txId: txId, sender: sender, type: messageType)
+            return false
+        }
+        recentlyHandledPushes[txId] = Date()
+        if let task = retryTasks.removeValue(forKey: txId) {
+            task.cancel()
+        }
+        SharedDataManager.removePendingMessage(txId: txId)
+        return true
+    }
+
+    // MARK: - Private Helpers
+
+    private func loadPersistedState() {
+        // Try Keychain first, then migrate from UserDefaults if needed
+        if let keychainToken = loadTokenFromKeychain() {
+            deviceToken = keychainToken
+        } else {
+            // Migration: check UserDefaults for legacy token
+            let defaults = UserDefaults.standard
+            if let legacyToken = defaults.string(forKey: tokenDefaultsKey) {
+                deviceToken = legacyToken
+                saveTokenToKeychain(legacyToken)
+                defaults.removeObject(forKey: tokenDefaultsKey)
+            }
+        }
+        voipToken = loadVoipTokenFromKeychain()
+        let storedRegistered = UserDefaults.standard.bool(forKey: registeredDefaultsKey)
+        isRegistered = storedRegistered && deviceToken != nil
+
+        // A device that crossed APNs environments (developer installs a TestFlight build over an
+        // Xcode build, or vice versa) holds a server record pinned to the OLD environment and a
+        // token the old endpoint will reject. `refreshRegistrationIfNeeded()` would only PUT an
+        // update in that state; invalidate the cached status so it performs a FULL re-register.
+        let storedEnvironment = UserDefaults.standard.string(forKey: registeredApnsEnvironmentDefaultsKey)
+        if isRegistered,
+           let storedEnvironment,
+           storedEnvironment != ApnsEnvironment.current.rawValue {
+            AppLog.log("[Push] APNs environment changed (%@ -> %@) - forcing re-registration",
+                       storedEnvironment,
+                       ApnsEnvironment.current.rawValue)
+            isRegistered = false
+            persistRegistrationStatus(false)
+            // The saved token belongs to the OTHER environment - it lives in the Keychain, which
+            // survives installing an Xcode build over TestFlight (or back). Registering it again
+            // labelled with the new environment sent every push to the wrong APNs host with a
+            // token that host rejects. Drop it, so the next refresh asks iOS for this build's
+            // token and registers that.
+            deviceToken = nil
+        }
+
+        // Same on a new build. The "registered" flag survives an app update, but whether the
+        // service still holds a working record for this device does not always (a token
+        // reissued with the install, a server that dropped the row); a beta that stopped
+        // pinging until notifications were toggled off and on was this. One full register per
+        // build is cheap insurance.
+        let storedBuild = UserDefaults.standard.string(forKey: registeredBuildDefaultsKey)
+        if isRegistered, storedBuild != Self.currentBuildIdentifier {
+            AppLog.log("[Push] App build changed (%@ -> %@) - forcing re-registration",
+                       storedBuild ?? "none", Self.currentBuildIdentifier)
+            isRegistered = false
+            persistRegistrationStatus(false)
+        }
+    }
+
+    /// "version (build)" of the running app, the unit a beta install changes.
+    private static var currentBuildIdentifier: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
+    private func persistDeviceToken(_ token: String) {
+        saveTokenToKeychain(token)
+    }
+
+    // MARK: - Keychain Helpers (Push Token)
+
+    private static let keychainService = "com.kachat.wallet"
+    private static let keychainAccount = "push_device_token"
+    private static let voipKeychainAccount = "push_voip_token"
+    private static let deviceAuthKeychainAccount = "push_device_auth_private_key"
+
+    private func saveTokenToKeychain(_ token: String) {
+        guard let data = token.data(using: .utf8) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.keychainAccount
+        ]
+        // Delete existing item first
+        SecItemDelete(query as CFDictionary)
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse!
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private func loadTokenFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func saveVoipTokenToKeychain(_ token: String?) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.voipKeychainAccount
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard let token, let data = token.data(using: .utf8) else { return }
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse!
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private func loadVoipTokenFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.voipKeychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func saveDeviceAuthPrivateKeyToKeychain(_ keyData: Data) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.deviceAuthKeychainAccount
+        ]
+        SecItemDelete(query as CFDictionary)
+        var addQuery = query
+        addQuery[kSecValueData as String] = keyData
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse!
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private func loadDeviceAuthPrivateKeyFromKeychain() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.deviceAuthKeychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return data
+    }
+
+    private func nextDeviceAuthCounter() -> UInt64 {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: deviceAuthCounterDefaultsKey) as? NSNumber
+        let next = previous?.uint64Value ?? 0
+        let advanced = next &+ 1
+        defaults.set(NSNumber(value: advanced), forKey: deviceAuthCounterDefaultsKey)
+        return advanced
+    }
+
+    private func persistRegistrationStatus(_ isRegistered: Bool) {
+        let defaults = UserDefaults.standard
+        defaults.set(isRegistered, forKey: registeredDefaultsKey)
+    }
+
+    private func checkPermissionStatus() async {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        permissionStatus = settings.authorizationStatus
+        refreshRegistrationIfNeeded()
+    }
+
+    private func observeSettingsChanges() {
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .settingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshRegistrationIfNeeded()
+            }
+        }
+    }
+
+    private func observeConversationVisibilityChanges() {
+        conversationsCancellable = ChatService.shared.$conversations
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let settings = AppSettings.load()
+                guard settings.notificationMode == .remotePush else { return }
+                Task { await self.updateWatchedAddresses() }
+            }
+
+        declinedContactsCancellable = ChatService.shared.$declinedContacts
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let settings = AppSettings.load()
+                guard settings.notificationMode == .remotePush else { return }
+                Task { await self.updateWatchedAddresses() }
+            }
+
+        groupsCancellable = GroupChatService.shared.$groups
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let settings = AppSettings.load()
+                guard settings.notificationMode == .remotePush else { return }
+                Task { await self.updateWatchedAddresses() }
+            }
+
+        // Muting/unmuting a member doesn't change `$groups` itself, so it needs its own
+        // subscription to actually refresh which blinded ids get watched (see
+        // `collectWatchedGroupIds`'s muted-member exclusion).
+        groupMutedMembersCancellable = GroupChatService.shared.$groupMutedMembers
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let settings = AppSettings.load()
+                guard settings.notificationMode == .remotePush else { return }
+                Task { await self.updateWatchedAddresses() }
+            }
+
+        // Silencing a group takes it OFF the server's watch list (see `collectWatchedGroupIds`),
+        // so the toggle has to reach the service the moment it flips.
+        groupSilentCancellable = GroupChatService.shared.$groupSilentNotifications
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let settings = AppSettings.load()
+                guard settings.notificationMode == .remotePush else { return }
+                Task { await self.updateWatchedAddresses() }
+            }
+    }
+
+    /// Indexer-tracked public chat channels (#kaspa/#kachat-bugs) whose bell is on - the push
+    /// service sends public chat-room pushes for these while the app is closed. Bell off =
+    /// channel excluded = no push.
+    private func collectWatchedPublicChatChannels() -> [String] {
+        // Simple Mode: no public chat channels registered with the push service at all. Toggling
+        // the mode posts .settingsDidChange -> refreshRegistrationIfNeeded -> updateWatchedAddresses,
+        // whose fingerprint includes this list, so the re-registration happens automatically.
+        guard !AppSettings.load().childModeEnabled else { return [] }
+        return PublicChatService.shared.channels
+            .filter { PublicChatService.isIndexerTracked($0.channelName) && $0.notifyEnabled }
+            .map(\.channelName)
+            .sorted()
+    }
+
+    /// Per-room hidden senders for the watched (indexed) channels - the push service must not
+    /// send pushes from these senders to this device. Legacy global hides apply to every
+    /// watched channel.
+    private func collectHiddenPublicChatSenders() -> [String: [String]] {
+        let hidden = PublicChatService.shared.hiddenSendersByChannel()
+        var result: [String: [String]] = [:]
+        for channel in collectWatchedPublicChatChannels() {
+            let combined = hidden.global.union(hidden.perChannel[channel] ?? [])
+            if !combined.isEmpty {
+                result[channel] = combined.sorted()
+            }
+        }
+        return result
+    }
+
+    /// The wallet's K (KaPosts) identity - the push service sends "actions on your content"
+    /// pushes for it while the app is closed. Nil when no wallet is loaded.
+    private func collectKaPostsPubkey() -> String? {
+        // Simple Mode: no KaPosts identity registered with the push service - same auto
+        // re-registration path as collectWatchedPublicChatChannels above.
+        guard !AppSettings.load().childModeEnabled else { return nil }
+        return try? KaPostsAPIClient.shared.requesterPubkey()
+    }
+
+    /// The authors this account asked to hear about when they post (KaPosts' bell). Empty in
+    /// Simple Mode, like the KaPosts identity itself.
+    private func collectKaPostsWatchAuthors() -> [String] {
+        guard collectKaPostsPubkey() != nil else { return [] }
+        return KaPostsWatchStore.shared.watchedPubkeys
+    }
+
+    private func collectWatchedAddresses() -> [String] {
+        let settings = AppSettings.load()
+        return ChatService.shared.pushEligibleConversationAddresses(settings: settings)
+    }
+
+    /// `blinded_group_id` is per-sender, not per-group, so for each local group we watch every
+    /// OTHER member's blinded id (never our own - we don't need a push for messages we sent).
+    /// Returns nil when ANY group's bag fails to load (transient keychain/SE hiccup): the indexer
+    /// treats an update as a full replace, so silently `continue`-ing (the old behavior) submitted
+    /// a truncated list that DELETED the failed group's subscriptions server-side - that group then
+    /// received no pushes at all until an unrelated successful update.
+    private func collectWatchedGroupIds() -> [String]? {
+        let myAddress = WalletManager.shared.currentWallet?.publicAddress
+        var ids = Set<String>()
+        for group in GroupChatService.shared.groups {
+            // A silenced group is not watched at all: no push is ever sent for it, so the
+            // silence holds whether or not the notification extension gets to run (an
+            // undecryptable or payload-less push used to fall back to a generic "New group
+            // message" banner with no way to know which group it was for). Messages still
+            // arrive through the block scan and catch-up, as they do for muted members.
+            guard !GroupChatService.shared.silentNotifications(for: group.id) else { continue }
+            guard let bag = try? KeychainService.shared.loadGroupBag(groupId: group.id),
+                  let blindingKey = Data(hexString: bag.blindingKey) else {
+                AppLog.log("[Push] Failed to load group bag for %@ - aborting group-id collection", group.id)
+                return nil
+            }
+            let mutedAddresses = GroupChatService.shared.mutedMemberAddresses(for: group.id)
+            for member in group.members {
+                // A muted member's messages still show up in the thread (block-scan/catch-up
+                // aren't gated on this at all) - simply not watching their blinded id means the
+                // indexer never pushes a notification for them specifically, which is exactly
+                // "mute": still visible, just silent.
+                guard member.address != myAddress, !mutedAddresses.contains(member.address),
+                      let memberPubKey = Data(hexString: member.xOnlyPubKeyHex) else { continue }
+                let blindedGroupId = GroupCipher.deriveBlindedGroupId(blindingKey: blindingKey, memberXOnlyPubKey: memberPubKey)
+                ids.insert(blindedGroupId.hexString)
+            }
+        }
+        return Array(ids)
+    }
+
+    private func collectAliases(forWatchedAddresses watchedAddresses: [String]? = nil) -> [String] {
+        let addresses = Set((watchedAddresses ?? collectWatchedAddresses()).map { $0.lowercased() })
+        let aliases = ChatService.shared.knownIncomingAliases(forAddresses: addresses)
+        let normalized = aliases
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return Array(Set(normalized))
+    }
+
+    private func collectPrimaryAddress() -> String? {
+        WalletManager.shared.currentWallet?.publicAddress
+    }
+
+    private func buildPushAuth(
+        method: String,
+        path: String,
+        deviceToken: String,
+        watchedAddresses: [String],
+        watchedGroupIds: [String],
+        primaryAddress: String?,
+        aliases: [String],
+        /// false only for a request the service verifies without group ids (the ring): its
+        /// preimage then has no watched_group_ids_hash line.
+        includeWatchedGroupIds: Bool = true
+    ) async throws -> PushAuthRequest {
+        guard let wallet = WalletManager.shared.currentWallet else {
+            throw PushError.authFailed(reason: "No active wallet")
+        }
+
+        guard let privateKey = try KeychainService.shared.loadPrivateKey() else {
+            throw PushError.authFailed(reason: "Wallet private key is missing")
+        }
+
+        let settings = AppSettings.load()
+        let challenge = try await fetchPushChallenge(baseURL: settings.pushIndexerURL)
+
+        let walletPubkey = wallet.publicKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard walletPubkey.count == 64, isHexString(walletPubkey) else {
+            throw PushError.authFailed(reason: "Wallet public key must be 32-byte hex")
+        }
+
+        guard let walletAddress = canonicalAddressForAuth(wallet.publicAddress, network: settings.networkType) else {
+            throw PushError.authFailed(reason: "Wallet address is invalid")
+        }
+
+        let normalizedDeviceToken = try normalizeDeviceTokenForAuth(deviceToken)
+        let normalizedPrimaryAddress = canonicalAddressForAuth(primaryAddress, network: settings.networkType) ?? ""
+        let localTimestampMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        let timestampMs = min(
+            max(localTimestampMs, challenge.issuedAtMs),
+            challenge.expiresAtMs
+        )
+
+        let preimage = buildAuthPreimage(
+            nonce: challenge.nonce,
+            method: method,
+            path: path,
+            deviceToken: normalizedDeviceToken,
+            watchedAddresses: watchedAddresses,
+            watchedGroupIds: watchedGroupIds,
+            primaryAddress: normalizedPrimaryAddress,
+            aliases: aliases,
+            walletPubkey: walletPubkey,
+            walletAddress: walletAddress,
+            timestampMs: timestampMs,
+            expiresAtMs: challenge.expiresAtMs,
+            includeWatchedGroupIds: includeWatchedGroupIds
+        )
+
+        var signingMaterial = privateKey
+        defer { signingMaterial.zeroOut() }
+        let signingKey = try P256K.Schnorr.PrivateKey(dataRepresentation: signingMaterial)
+
+        let digest = Data(CryptoKit.SHA256.hash(data: Data(preimage.utf8)))
+        var message = [UInt8](digest)
+        defer {
+            for index in message.indices {
+                message[index] = 0
+            }
+        }
+        let signature = try signingKey.signature(message: &message, auxiliaryRand: nil)
+        let deviceAuth = try buildDeviceAuthProof(
+            nonce: challenge.nonce,
+            method: method,
+            path: path,
+            normalizedDeviceToken: normalizedDeviceToken,
+            timestampMs: timestampMs,
+            expiresAtMs: challenge.expiresAtMs
+        )
+        let deviceCheckToken = await generateDeviceCheckToken()
+
+        return PushAuthRequest(
+            walletPubkey: walletPubkey,
+            walletAddress: walletAddress,
+            nonce: challenge.nonce,
+            timestampMs: timestampMs,
+            expiresAtMs: challenge.expiresAtMs,
+            signature: Data(signature.bytes).hexString,
+            devicecheckToken: deviceCheckToken,
+            deviceAuth: PushDeviceAuthRequest(
+                scheme: deviceAuth.scheme,
+                keyId: deviceAuth.keyId,
+                pubkey: deviceAuth.pubkey,
+                counter: deviceAuth.counter,
+                signature: deviceAuth.signature
+            )
+        )
+    }
+
+    private func fetchPushChallenge(baseURL: String) async throws -> PushChallengeResponse {
+        guard let url = URL(string: "\(baseURL)\(challengeEndpoint)") else {
+            AppLog.log("[Push] Invalid push service URL: %@", baseURL)
+            throw PushError.invalidResponse
+        }
+        for attempt in 0..<3 {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 15
+
+            do {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw PushError.invalidResponse
+                }
+
+                guard httpResponse.statusCode == 200 else {
+                    let reason = parseIndexerError(from: responseData) ?? "unknown"
+                    throw PushError.authFailed(
+                        reason: "Challenge failed (status: \(httpResponse.statusCode)): \(reason)"
+                    )
+                }
+
+                do {
+                    return try JSONDecoder().decode(PushChallengeResponse.self, from: responseData)
+                } catch {
+                    throw PushError.authFailed(reason: "Invalid challenge response")
+                }
+            } catch let urlError as URLError where isTransientChallengeNetworkError(urlError) && attempt < 2 {
+                let delayNs = UInt64((attempt + 1) * 300_000_000)
+                try? await Task.sleep(nanoseconds: delayNs)
+                continue
+            }
+        }
+        throw PushError.authFailed(reason: "Failed to fetch challenge")
+    }
+
+    private func isTransientChallengeNetworkError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .networkConnectionLost, .notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func buildAuthPreimage(
+        nonce: String,
+        method: String,
+        path: String,
+        deviceToken: String,
+        watchedAddresses: [String],
+        watchedGroupIds: [String],
+        primaryAddress: String,
+        aliases: [String],
+        walletPubkey: String,
+        walletAddress: String,
+        timestampMs: UInt64,
+        expiresAtMs: UInt64,
+        includeWatchedGroupIds: Bool = true
+    ) -> String {
+        let watchedHash = sha256Hex(canonicalizeWatchedAddressesForAuth(watchedAddresses).joined(separator: "\n"))
+        let watchedGroupIdsHash = sha256Hex(canonicalizeWatchedGroupIdsForAuth(watchedGroupIds).joined(separator: "\n"))
+        let aliasesHash = sha256Hex(canonicalizeAliasesForAuth(aliases).joined(separator: "\n"))
+        let deviceTokenHash = sha256Hex(deviceToken)
+
+        var lines: [String] = [
+            "domain=\(pushAuthDomain)",
+            "nonce=\(nonce.trimmingCharacters(in: .whitespacesAndNewlines))",
+            "method=\(method)",
+            "path=\(path)",
+            "device_token_hash=\(deviceTokenHash)",
+            "watched_addresses_hash=\(watchedHash)"
+        ]
+        // the ring is verified without group ids, so its preimage has no such line (XP-010)
+        if includeWatchedGroupIds {
+            lines.append("watched_group_ids_hash=\(watchedGroupIdsHash)")
+        }
+        lines += [
+            "primary_address=\(primaryAddress)",
+            "aliases_hash=\(aliasesHash)",
+            "wallet_pubkey=\(walletPubkey)",
+            "wallet_address=\(walletAddress)",
+            "timestamp_ms=\(timestampMs)",
+            "expires_at_ms=\(expiresAtMs)"
+        ]
+        return lines.joined(separator: "\n")
+    }
+
+    private struct DeviceKeyMaterial {
+        let privateKey: P256.Signing.PrivateKey
+        let publicKeyData: Data
+        let keyId: String
+    }
+
+    private struct DeviceAuthProof {
+        let scheme: String
+        let keyId: String
+        let pubkey: String
+        let counter: UInt64
+        let signature: String
+    }
+
+    private func loadOrCreateDeviceKeyMaterial() throws -> DeviceKeyMaterial {
+        if let keyData = loadDeviceAuthPrivateKeyFromKeychain(),
+           let privateKey = try? P256.Signing.PrivateKey(rawRepresentation: keyData) {
+            let publicKeyData = privateKey.publicKey.x963Representation
+            let keyId = Data(CryptoKit.SHA256.hash(data: publicKeyData)).hexString
+            return DeviceKeyMaterial(privateKey: privateKey, publicKeyData: publicKeyData, keyId: keyId)
+        }
+
+        let privateKey = P256.Signing.PrivateKey()
+        let keyData = privateKey.rawRepresentation
+        saveDeviceAuthPrivateKeyToKeychain(keyData)
+        let publicKeyData = privateKey.publicKey.x963Representation
+        let keyId = Data(CryptoKit.SHA256.hash(data: publicKeyData)).hexString
+        return DeviceKeyMaterial(privateKey: privateKey, publicKeyData: publicKeyData, keyId: keyId)
+    }
+
+    private func buildDeviceAuthPreimage(
+        nonce: String,
+        method: String,
+        path: String,
+        deviceToken: String,
+        keyId: String,
+        counter: UInt64,
+        timestampMs: UInt64,
+        expiresAtMs: UInt64
+    ) -> String {
+        let deviceTokenHash = sha256Hex(deviceToken)
+        return [
+            "domain=\(pushDeviceAuthDomain)",
+            "nonce=\(nonce.trimmingCharacters(in: .whitespacesAndNewlines))",
+            "method=\(method)",
+            "path=\(path)",
+            "device_token_hash=\(deviceTokenHash)",
+            "key_id=\(keyId)",
+            "counter=\(counter)",
+            "timestamp_ms=\(timestampMs)",
+            "expires_at_ms=\(expiresAtMs)"
+        ].joined(separator: "\n")
+    }
+
+    private func buildDeviceAuthProof(
+        nonce: String,
+        method: String,
+        path: String,
+        normalizedDeviceToken: String,
+        timestampMs: UInt64,
+        expiresAtMs: UInt64
+    ) throws -> DeviceAuthProof {
+        let material = try loadOrCreateDeviceKeyMaterial()
+        let counter = nextDeviceAuthCounter()
+        let preimage = buildDeviceAuthPreimage(
+            nonce: nonce,
+            method: method,
+            path: path,
+            deviceToken: normalizedDeviceToken,
+            keyId: material.keyId,
+            counter: counter,
+            timestampMs: timestampMs,
+            expiresAtMs: expiresAtMs
+        )
+        let signature = try material.privateKey.signature(for: Data(preimage.utf8))
+        return DeviceAuthProof(
+            scheme: pushDeviceAuthScheme,
+            keyId: material.keyId,
+            pubkey: material.publicKeyData.base64EncodedString(),
+            counter: counter,
+            signature: signature.derRepresentation.base64EncodedString()
+        )
+    }
+
+    private func generateDeviceCheckToken() async -> String? {
+        #if targetEnvironment(simulator)
+        return nil
+        #else
+        guard DCDevice.current.isSupported else {
+            return nil
+        }
+        do {
+            return try await DCDevice.current.generateToken().base64EncodedString()
+        } catch {
+            return nil
+        }
+        #endif
+    }
+
+    private func normalizeDeviceTokenForAuth(_ token: String) throws -> String {
+        let cleaned = token.filter { $0.isHexDigit }.lowercased()
+        if cleaned.count < 64 || cleaned.count > 512 || cleaned.count % 2 != 0 {
+            throw PushError.authFailed(reason: "Invalid device token length")
+        }
+        return cleaned
+    }
+
+    private func canonicalizeWatchedAddressesForAuth(_ addresses: [String]) -> [String] {
+        var set = Set<String>()
+        for address in addresses {
+            let normalized = address
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !normalized.isEmpty {
+                set.insert(normalized)
+            }
+        }
+        return set.sorted()
+    }
+
+    private func canonicalizeWatchedGroupIdsForAuth(_ groupIds: [String]) -> [String] {
+        var set = Set<String>()
+        for groupId in groupIds {
+            let normalized = groupId
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !normalized.isEmpty {
+                set.insert(normalized)
+            }
+        }
+        return set.sorted()
+    }
+
+    private func canonicalizeAliasesForAuth(_ aliases: [String]) -> [String] {
+        var set = Set<String>()
+        for alias in aliases {
+            let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalized.isEmpty {
+                set.insert(normalized)
+            }
+        }
+        return set.sorted()
+    }
+
+    private func canonicalAddressForAuth(_ address: String?, network: NetworkType) -> String? {
+        guard var normalized = address?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalized.isEmpty else {
+            return nil
+        }
+
+        if !normalized.contains(":") {
+            let prefix = network == .mainnet ? "kaspa" : "kaspatest"
+            normalized = "\(prefix):\(normalized)"
+        }
+
+        normalized = normalized.lowercased()
+        guard let parsed = KaspaAddress(address: normalized) else {
+            return nil
+        }
+        return parsed.address
+    }
+
+    private func sha256Hex(_ value: String) -> String {
+        Data(CryptoKit.SHA256.hash(data: Data(value.utf8))).hexString
+    }
+
+    private func isHexString(_ value: String) -> Bool {
+        let charset = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        return !value.isEmpty && value.unicodeScalars.allSatisfy { charset.contains($0) }
+    }
+
+    private func isWalletBindingConflict(statusCode: Int, reason: String?) -> Bool {
+        guard statusCode == 401, let reason else { return false }
+        return reason.lowercased().contains("bound to another wallet")
+    }
+
+    private func currentWalletBindingFingerprint() -> String? {
+        guard let token = deviceToken else { return nil }
+        guard let walletPubkey = WalletManager.shared.currentWallet?.publicKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+              !walletPubkey.isEmpty else {
+            return nil
+        }
+        return "\(token)|\(walletPubkey)"
+    }
+
+    private func shouldDeferRegistrationForWalletBindingConflict() -> Bool {
+        guard let blockedFingerprint = walletBindingConflictFingerprint,
+              let blockedUntil = walletBindingConflictUntil else {
+            return false
+        }
+        guard let currentFingerprint = currentWalletBindingFingerprint(),
+              currentFingerprint == blockedFingerprint else {
+            clearWalletBindingConflictCooldown()
+            return false
+        }
+        let now = Date()
+        if now >= blockedUntil {
+            clearWalletBindingConflictCooldown()
+            return false
+        }
+        if let lastLog = lastWalletBindingConflictLogAt,
+           now.timeIntervalSince(lastLog) < walletBindingConflictLogCooldown {
+            return true
+        }
+        let remainingSeconds = Int(ceil(blockedUntil.timeIntervalSince(now)))
+        AppLog.log("[Push] Skipping push registration for %ds due to wallet binding conflict", max(1, remainingSeconds))
+        lastWalletBindingConflictLogAt = now
+        return true
+    }
+
+    private func activateWalletBindingConflictCooldown(reason: String?) {
+        guard let fingerprint = currentWalletBindingFingerprint() else { return }
+        walletBindingConflictFingerprint = fingerprint
+        walletBindingConflictUntil = Date().addingTimeInterval(walletBindingConflictCooldown)
+        isRegistered = false
+        persistRegistrationStatus(false)
+
+        let now = Date()
+        if let lastLog = lastWalletBindingConflictLogAt,
+           now.timeIntervalSince(lastLog) < walletBindingConflictLogCooldown {
+            return
+        }
+        lastWalletBindingConflictLogAt = now
+        let normalizedReason = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedReason, !normalizedReason.isEmpty {
+            AppLog.log("[Push] Token-wallet binding conflict: %@. Deferring retries for %.0f seconds.",
+                  normalizedReason,
+                  walletBindingConflictCooldown)
+        } else {
+            AppLog.log("[Push] Token-wallet binding conflict. Deferring retries for %.0f seconds.",
+                  walletBindingConflictCooldown)
+        }
+    }
+
+    private func clearWalletBindingConflictCooldown() {
+        walletBindingConflictFingerprint = nil
+        walletBindingConflictUntil = nil
+        lastWalletBindingConflictLogAt = nil
+    }
+
+    private func parseIndexerError(from data: Data) -> String? {
+        if let decoded = try? JSONDecoder().decode(PushIndexerErrorResponse.self, from: data) {
+            let message = decoded.error.trimmingCharacters(in: .whitespacesAndNewlines)
+            return message.isEmpty ? nil : message
+        }
+        if let fallback = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !fallback.isEmpty {
+            return fallback
+        }
+        return nil
+    }
+
+    private func decryptContextualPayload(_ payload: String) -> String? {
+        guard let privateKey = try? KeychainService.shared.loadPrivateKey() else {
+            AppLog.log("[Push] Decrypt failed: missing private key")
+            return nil
+        }
+
+        // A first-contact `dm` message reads as `comm` (ContextualPayloadFormat).
+        if let payloadString = decodePayloadString(from: payload).map(ContextualPayloadFormat.normalized),
+           (payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:")) {
+            let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
+            guard parts.count >= 5 else { return nil }
+            let base64String = String(parts[4])
+            guard let encryptedData = Data(base64Encoded: base64String) else { return nil }
+            return decryptEncryptedBytes(encryptedData, privateKey: privateKey)
+        }
+
+        if let encryptedData = Data(base64Encoded: payload) {
+            if let decrypted = decryptEncryptedBytes(encryptedData, privateKey: privateKey) {
+                return decrypted
+            }
+
+            if let utf8 = String(data: encryptedData, encoding: .utf8) {
+                if let hexData = Data(hexString: utf8) {
+                    return decryptEncryptedBytes(hexData, privateKey: privateKey)
+                }
+                if let payloadString = decodePayloadString(from: utf8).map(ContextualPayloadFormat.normalized),
+                   (payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:")) {
+                    let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
+                    if parts.count >= 5,
+                       let nestedEncrypted = Data(base64Encoded: String(parts[4])) {
+                        return decryptEncryptedBytes(nestedEncrypted, privateKey: privateKey)
+                    }
+                }
+            }
+        }
+
+        if let encryptedData = Data(hexString: payload) {
+            return decryptEncryptedBytes(encryptedData, privateKey: privateKey)
+        }
+
+        return nil
+    }
+
+    private func decodePayloadString(from payload: String) -> String? {
+        if let payloadData = Data(hexString: payload),
+           let payloadString = String(data: payloadData, encoding: .utf8) {
+            return payloadString
+        }
+        if payload.hasPrefix("kchat:") || payload.hasPrefix("ciph_msg:") {
+            return payload
+        }
+        return nil
+    }
+
+    private func decryptEncryptedBytes(_ encryptedData: Data, privateKey: Data) -> String? {
+        guard let encrypted = KasiaCipher.EncryptedMessage(fromBytes: encryptedData) else {
+            AppLog.log("[Push] Decrypt failed: invalid encrypted message len=%d", encryptedData.count)
+            return nil
+        }
+        do {
+            return try KasiaCipher.decrypt(encrypted, privateKey: privateKey)
+        } catch {
+            AppLog.log("[Push] Decrypt failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func extractTimestamp(userInfo: [AnyHashable: Any]) -> Int64 {
+        if let timestamp = userInfo["timestamp"] as? Int64 {
+            return timestamp
+        }
+        if let timestamp = userInfo["timestamp"] as? NSNumber {
+            return timestamp.int64Value
+        }
+        return Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private func extractAmount(userInfo: [AnyHashable: Any]) -> UInt64? {
+        if let amount = userInfo["amount"] as? UInt64 {
+            return amount
+        }
+        if let amount = userInfo["amount"] as? Int {
+            return UInt64(amount)
+        }
+        if let amount = userInfo["amount"] as? NSNumber {
+            return amount.uint64Value
+        }
+        if let amount = userInfo["amount"] as? String, let value = UInt64(amount) {
+            return value
+        }
+        return nil
+    }
+
+    private func pruneRecentlyHandledPushes() {
+        let cutoff = Date().addingTimeInterval(-120)
+        recentlyHandledPushes = recentlyHandledPushes.filter { $0.value >= cutoff }
+    }
+
+    private func scheduleRetryFetchIfActive(txId: String, sender: String, type: String?) {
+        guard UIApplication.shared.applicationState == .active else { return }
+        if retryTasks[txId] != nil {
+            return
+        }
+
+        retryTasks[txId] = Task { [weak self] in
+            let delays: [UInt64] = [5, 15, 30]
+            for seconds in delays {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                let fetched: Bool
+                if type == "payment" {
+                    fetched = await ChatService.shared.fetchPaymentByTxId(
+                        txId,
+                        sender: sender,
+                        amount: nil,
+                        timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                    )
+                } else {
+                    fetched = await ChatService.shared.fetchMessageByTxId(txId, sender: sender)
+                }
+                if fetched {
+                    SharedDataManager.removePendingMessage(txId: txId)
+                    await MainActor.run {
+                        self?.recentlyHandledPushes[txId] = Date()
+                    }
+                    break
+                }
+            }
+            await MainActor.run {
+                self?.retryTasks[txId] = nil
+            }
+        }
+    }
+}
+
+// MARK: - APNs Environment
+
+/// Which APNs endpoint the device token issued to THIS build belongs to.
+///
+/// APNs tokens are environment-scoped. A build installed from Xcode gets a *sandbox* token
+/// (`api.sandbox.push.apple.com`); TestFlight and App Store builds get a *production* token
+/// (`api.push.apple.com`). Sending a token to the wrong endpoint fails silently per device -
+/// Apple answers `BadDeviceToken` and nothing is delivered - which is exactly how TestFlight
+/// installs ended up receiving no pushes at all while a dev build on the same phone worked.
+/// A single global server setting cannot serve both populations, so the app reports its own
+/// environment at registration and the server routes per device.
+enum ApnsEnvironment: String {
+    case development
+    case production
+
+    /// Resolved once per process - the answer cannot change without a reinstall.
+    static let current: ApnsEnvironment = resolve()
+
+    private static func resolve() -> ApnsEnvironment {
+        switch apsEnvironmentEntitlement() {
+        case "development": return .development
+        case "production": return .production
+        default:
+            // No embedded profile (or an unexpected value): fall back to the build config.
+            #if DEBUG
+            return .development
+            #else
+            return .production
+            #endif
+        }
+    }
+
+    /// Reads `aps-environment` out of the embedded provisioning profile - the accurate runtime
+    /// signal for how this binary was signed. (`SecTaskCopyValueForEntitlement` is not public
+    /// API on iOS, so the profile is the only supported way to read our own entitlements.)
+    ///
+    /// `embedded.mobileprovision` is a CMS blob with the profile plist stored as plain XML
+    /// inside it, so the plist is sliced out between the XML prologue and the final `</plist>`.
+    private static func apsEnvironmentEntitlement() -> String? {
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url),
+              let start = data.range(of: Data("<?xml".utf8)),
+              let end = data.range(of: Data("</plist>".utf8), options: [.backwards]),
+              start.lowerBound < end.upperBound else {
+            return nil
+        }
+        let plistData = Data(data[start.lowerBound..<end.upperBound])
+        guard let plist = try? PropertyListSerialization.propertyList(
+                from: plistData,
+                options: [],
+                format: nil
+              ) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any],
+              let apsEnvironment = entitlements["aps-environment"] as? String else {
+            return nil
+        }
+        return apsEnvironment
+    }
+}
+
+// MARK: - Request Models
+
+struct PushRegistrationRequest: Codable {
+    let deviceToken: String
+    let platform: String
+    let watchedAddresses: [String]
+    let watchedGroupIds: [String]
+    let watchedPublicChatChannels: [String]
+    let hiddenPublicChatSenders: [String: [String]]
+    let kapostsPubkey: String?
+    /// The reader's per-kind KaPosts switches, so the server can skip a push at the source
+    /// (PUSH_EXTENSIONS.md §3). KaPosts pushes are plain alerts with no mutable-content, so the
+    /// notification service extension never runs for them and cannot filter on the device;
+    /// registering the kinds is the only way a switched-off kind stops arriving in the background.
+    /// Mentions are deliberately not switchable.
+    let kapostsNotifyLikes: Bool
+    let kapostsNotifyDislikes: Bool
+    let kapostsNotifyComments: Bool
+    let kapostsNotifyReposts: Bool
+    let kapostsNotifyFollows: Bool
+    /// Authors whose new posts this device wants a push for - the bell beside Follow
+    /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
+    let kapostsWatchAuthors: [String]
+    let primaryAddress: String?
+    let aliases: [String]
+    /// "development" | "production" - which APNs endpoint this device's token is valid for.
+    let apnsEnvironment: String
+    /// PushKit VoIP token (hex), for ringing this device through `/v1/push/ring`. Same APNs
+    /// environment as `deviceToken`. Missing/null = this device cannot be rung.
+    let voipToken: String?
+    let auth: PushAuthRequest?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceToken = "device_token"
+        case platform
+        case watchedAddresses = "watched_addresses"
+        case watchedGroupIds = "watched_group_ids"
+        case watchedPublicChatChannels = "watched_broadcast_channels"
+        case hiddenPublicChatSenders = "hidden_broadcast_senders"
+        case kapostsPubkey = "kaposts_pubkey"
+        case kapostsNotifyLikes = "kaposts_notify_likes"
+        case kapostsNotifyDislikes = "kaposts_notify_dislikes"
+        case kapostsNotifyComments = "kaposts_notify_comments"
+        case kapostsNotifyReposts = "kaposts_notify_reposts"
+        case kapostsNotifyFollows = "kaposts_notify_follows"
+        case kapostsWatchAuthors = "kaposts_watch_authors"
+        case primaryAddress = "primary_address"
+        case aliases
+        case apnsEnvironment = "apns_environment"
+        case voipToken = "voip_token"
+        case auth
+    }
+}
+
+struct PushUpdateRequest: Codable {
+    let deviceToken: String
+    let watchedAddresses: [String]
+    let watchedGroupIds: [String]
+    let watchedPublicChatChannels: [String]
+    let hiddenPublicChatSenders: [String: [String]]
+    let kapostsPubkey: String?
+    /// See PushRegistrationRequest: the same five switches, kept current on every update.
+    let kapostsNotifyLikes: Bool
+    let kapostsNotifyDislikes: Bool
+    let kapostsNotifyComments: Bool
+    let kapostsNotifyReposts: Bool
+    let kapostsNotifyFollows: Bool
+    /// Authors whose new posts this device wants a push for - the bell beside Follow
+    /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
+    let kapostsWatchAuthors: [String]
+    let primaryAddress: String?
+    let aliases: [String]
+    /// "development" | "production" - which APNs endpoint this device's token is valid for.
+    let apnsEnvironment: String
+    /// See PushRegistrationRequest.
+    let voipToken: String?
+    let auth: PushAuthRequest?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceToken = "device_token"
+        case watchedAddresses = "watched_addresses"
+        case watchedGroupIds = "watched_group_ids"
+        case watchedPublicChatChannels = "watched_broadcast_channels"
+        case hiddenPublicChatSenders = "hidden_broadcast_senders"
+        case kapostsPubkey = "kaposts_pubkey"
+        case kapostsNotifyLikes = "kaposts_notify_likes"
+        case kapostsNotifyDislikes = "kaposts_notify_dislikes"
+        case kapostsNotifyComments = "kaposts_notify_comments"
+        case kapostsNotifyReposts = "kaposts_notify_reposts"
+        case kapostsNotifyFollows = "kaposts_notify_follows"
+        case kapostsWatchAuthors = "kaposts_watch_authors"
+        case primaryAddress = "primary_address"
+        case aliases
+        case apnsEnvironment = "apns_environment"
+        case voipToken = "voip_token"
+        case auth
+    }
+}
+
+/// `POST /v1/push/ring` - ring `toAddress`'s devices for a call this device is placing
+/// (PUSH_EXTENSIONS.md §5).
+struct PushRingRequest: Codable {
+    let deviceToken: String
+    let toAddress: String
+    let callId: String
+    let video: Bool
+    /// "invite" (the caller hosts the room) | "request" (the caller asks the callee to host).
+    let kind: String
+    /// The opening call message, encrypted to the callee exactly as on chain, hex.
+    let payload: String
+    let timestampMs: UInt64
+    let auth: PushAuthRequest?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceToken = "device_token"
+        case toAddress = "to_address"
+        case callId = "call_id"
+        case video
+        case kind
+        case payload
+        case timestampMs = "timestamp"
+        case auth
+    }
+}
+
+struct PushUnregisterRequest: Codable {
+    let deviceToken: String
+    let auth: PushAuthRequest?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceToken = "device_token"
+        case auth
+    }
+}
+
+struct PushAuthRequest: Codable {
+    let walletPubkey: String
+    let walletAddress: String
+    let nonce: String
+    let timestampMs: UInt64
+    let expiresAtMs: UInt64
+    let signature: String
+    let devicecheckToken: String?
+    let deviceAuth: PushDeviceAuthRequest?
+
+    enum CodingKeys: String, CodingKey {
+        case walletPubkey = "wallet_pubkey"
+        case walletAddress = "wallet_address"
+        case nonce
+        case timestampMs = "timestamp_ms"
+        case expiresAtMs = "expires_at_ms"
+        case signature
+        case devicecheckToken = "devicecheck_token"
+        case deviceAuth = "device_auth"
+    }
+}
+
+struct PushDeviceAuthRequest: Codable {
+    let scheme: String
+    let keyId: String
+    let pubkey: String
+    let counter: UInt64
+    let signature: String
+
+    enum CodingKeys: String, CodingKey {
+        case scheme
+        case keyId = "key_id"
+        case pubkey
+        case counter
+        case signature
+    }
+}
+
+private struct PushChallengeResponse: Decodable {
+    let nonce: String
+    let issuedAtMs: UInt64
+    let expiresAtMs: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case nonce
+        case issuedAtMs = "issued_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+}
+
+private struct PushIndexerErrorResponse: Decodable {
+    let error: String
+}
+
+// MARK: - Errors
+
+enum PushError: LocalizedError {
+    case permissionDenied
+    case noDeviceToken
+    case invalidResponse
+    case registrationFailed(statusCode: Int, reason: String?)
+    case updateFailed
+    case registrationTimedOut
+    case registrationInProgress
+    case noWatchedAddresses
+    case authFailed(reason: String)
+    case ringFailed(statusCode: Int, reason: String?)
+    case noPushService
+
+    var errorDescription: String? {
+        switch self {
+        case .noPushService:
+            return NSLocalizedString("This network has no push service yet.", comment: "Push error: the current network has no push service address")
+        case .permissionDenied:
+            return "Notification permission denied"
+        case .noDeviceToken:
+            return "No device token available. Please enable notifications."
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .registrationFailed(let statusCode, let reason):
+            if let reason,
+               !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Registration failed (status: \(statusCode)): \(reason)"
+            }
+            return "Registration failed (status: \(statusCode))"
+        case .updateFailed:
+            return "Failed to update push registration"
+        case .registrationTimedOut:
+            return "Push registration timed out"
+        case .registrationInProgress:
+            return "Push registration already in progress"
+        case .noWatchedAddresses:
+            return "No addresses available for push notifications"
+        case .authFailed(let reason):
+            return "Push auth failed: \(reason)"
+        case .ringFailed(let statusCode, let reason):
+            return "Ring push failed (\(statusCode))" + (reason.map { ": \($0)" } ?? "")
+        }
+    }
+}

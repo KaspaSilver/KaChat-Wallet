@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AppIdentifierPrefix</key>
+	<string>$(AppIdentifierPrefix)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.kachat.wallet.messageFetch</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kachat.wallet</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kachatwallet</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(KACHAT_BUILD_NUMBER)</string>
+	<key>ChangeNowAPIKey</key>
+	<string>$(CHANGENOW_API_KEY)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>KaChatBuildNumber</key>
+	<string>$(KACHAT_BUILD_NUMBER)</string>
+	<key>KaChatIsRelease</key>
+	<string>$(KACHAT_IS_RELEASE)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>KaChat uses the camera for video calls, to scan QR codes when adding contacts, and to take photos to send in a chat.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID is used to unlock your seed phrase and sign back in, when enabled in Settings.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>KaChat connects to a Kaspa node or a Nextcloud server on your local network only if you configure one, and to other phones on it during calls.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>KaChat uses the microphone for voice and video calls and to record audio messages.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save received images to your photo library.</string>
+	<key>NSSiriUsageDescription</key>
+	<string>Lets you start a KaChat call by asking Siri.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INStartCallIntent</string>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+		<string>voip</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>KaChat Wallet Tab</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.kachat.wallet.apptab</string>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,1822 @@
+import Foundation
+import Combine
+import UIKit
+import UserNotifications
+import CryptoKit
+
+// MARK: - Data persistence, UI helpers, aliases, badges
+
+/// Serial on purpose: chat-list snapshot writes must land in the order they were requested, and
+/// a multi-MB encode for one can outlive the debounce that requests the next.
+private let chatListSnapshotQueue = DispatchQueue(label: "com.kachat.chat-list-snapshot", qos: .utility)
+
+extension ChatService {
+    nonisolated static func hexStringToData(_ hex: String) -> Data? {
+        var data = Data()
+        var temp = ""
+
+        for char in hex {
+            temp += String(char)
+            if temp.count == 2 {
+                if let byte = UInt8(temp, radix: 16) {
+                    data.append(byte)
+                } else {
+                    return nil
+                }
+                temp = ""
+            }
+        }
+
+        return data
+    }
+
+    func migrateLegacyMessagesIfNeeded() {
+        guard let data = userDefaults.data(forKey: messagesKey),
+              let cachedConversations = try? JSONDecoder().decode([CachedConversation].self, from: data) else {
+            return
+        }
+        guard let key = messageEncryptionKey() else { return }
+        guard messageStore.isStoreLoaded else {
+            if !legacyMigrationScheduled {
+                legacyMigrationScheduled = true
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    self?.legacyMigrationScheduled = false
+                    self?.migrateLegacyMessagesIfNeeded()
+                }
+            }
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let conversations = await MainActor.run { () -> [Conversation] in
+                cachedConversations.compactMap { cached in
+                    guard let contact = self.contactsManager.getContact(byAddress: cached.contactAddress) else { return nil }
+                    return Conversation(id: cached.id, contact: contact, messages: cached.messages, unreadCount: cached.unreadCount)
+                }
+            }
+            let didWrite = await self.messageStore.syncFromConversations(
+                conversations,
+                encryptionKey: key,
+                retention: SettingsViewModel.loadSettings().messageRetention
+            )
+            if didWrite {
+                await MainActor.run {
+                    self.recordLocalSave()
+                }
+            }
+        }
+        userDefaults.removeObject(forKey: messagesKey)
+    }
+
+    /// Public method to reload messages from the message store.
+    /// Call this after an archive restore to pick up messages written to the store.
+    /// - Parameter forceReload: If true, reloads even if conversations are not empty
+    func loadChatListSnapshot(for walletAddress: String) {
+        guard conversations.isEmpty else { return }
+        let cached = ChatListSnapshotStore.load(walletAddress: walletAddress)
+        guard !cached.isEmpty else { return }
+        conversations = cached
+        dropOtherNetworkConversations()
+    }
+
+    /// Removes conversations whose contact is on the other network - mainnet chats that pushes
+    /// filed into the testnet account before `addMessageToConversation` checked the network -
+    /// from the list and from this wallet's store.
+    func dropOtherNetworkConversations() {
+        let stray = conversations.filter { !NetworkType.isOnActiveNetwork($0.contact.address) }
+        guard !stray.isEmpty else { return }
+        conversations.removeAll { !NetworkType.isOnActiveNetwork($0.contact.address) }
+        AppLog.log("[ChatService] Removed %d conversations that belong to the other network", stray.count)
+        for conversation in stray {
+            let address = conversation.contact.address
+            Task { await MessageStore.shared.deleteConversation(contactAddress: address) }
+        }
+    }
+
+    /// Debounced wrapper around `persistChatListSnapshotIfPossible()` - `conversations`'s `didSet`
+    /// fires on every single per-message/per-index mutation (e.g. `conversations[i].messages[j] = ...`
+    /// during a catch-up sync loop or push-driven delivery-status update), and the actual persist
+    /// does a full `JSONEncoder` encode of every conversation's complete `lastMessage` (including a
+    /// photo message's entire base64 payload) plus a `UserDefaults` write. Processing a burst of N
+    /// new messages after resuming from background used to mean N of those encode+write cycles
+    /// back-to-back on the main thread - a real freeze right in the app-resume scenario. Mirrors
+    /// `scheduleBadgeUpdate()`'s debounce right next to it, which this was missing.
+    func scheduleChatListSnapshotPersist() {
+        chatListSnapshotPersistTask?.cancel()
+        chatListSnapshotPersistTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            persistChatListSnapshotIfPossible(offMain: true)
+        }
+    }
+
+    /// `offMain` moves the encode and the defaults write onto `chatListSnapshotQueue`. The
+    /// debounce above bounds how OFTEN this runs, not what each run costs: a photo or voice
+    /// last-message is its whole base64 payload, so one save can be a multi-MB `JSONEncoder`
+    /// pass, and during a sync that landed on the main actor every 300ms. The queue is serial,
+    /// so a slow encode can never be overtaken by a newer one and written stale on top of it.
+    ///
+    /// The scene-phase flush in `KaChatApp` keeps the default (synchronous): it runs as the app
+    /// backgrounds precisely so the write lands before iOS can suspend the process, and a
+    /// queued write would defeat that.
+    func persistChatListSnapshotIfPossible(offMain: Bool = false) {
+        guard !suppressChatListSnapshotPersistence else { return }
+        guard let walletAddress = WalletManager.shared.currentWallet?.publicAddress else { return }
+        if offMain {
+            let snapshot = conversations
+            chatListSnapshotQueue.async {
+                ChatListSnapshotStore.save(snapshot, walletAddress: walletAddress)
+            }
+        } else {
+            ChatListSnapshotStore.save(conversations, walletAddress: walletAddress)
+        }
+    }
+
+    // `async` because the actual fetch+decrypt in `_loadMessagesFromStoreIfNeeded` now runs on a
+    // background Core Data context (see `MessageStore.fetchAllMessages`) - this used to run
+    // synchronously on `viewContext` (main-queue-confined), so any routine trigger for a full
+    // reload (e.g. a handshake's self-stash transaction confirming, which fires on essentially
+    // every handshake sent) froze the UI for as long as decrypting the whole wallet's message
+    // history took. Coalesces concurrent callers within `messageStoreReloadMinInterval` onto the
+    // same pending Task instead of each doing its own separate reload.
+    func loadMessagesFromStoreIfNeeded(onlyIfEmpty: Bool = true) async {
+        // Whatever the store held - nothing at all for a brand-new account - your chat with
+        // yourself is there once messages load.
+        defer { ensureSelfConversation() }
+        if onlyIfEmpty {
+            await _loadMessagesFromStoreIfNeeded(onlyIfEmpty: true)
+            return
+        }
+
+        if let pendingTask = messageStoreReloadTask {
+            await pendingTask.value
+            return
+        }
+
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastMessageStoreReloadAt)
+        if elapsed < messageStoreReloadMinInterval {
+            let delay = messageStoreReloadMinInterval - elapsed
+            let task = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(max(delay, 0) * 1_000_000_000))
+                guard let self else { return }
+                self.lastMessageStoreReloadAt = Date()
+                await self._loadMessagesFromStoreIfNeeded(onlyIfEmpty: false)
+                self.messageStoreReloadTask = nil
+            }
+            messageStoreReloadTask = task
+            await task.value
+            return
+        }
+
+        lastMessageStoreReloadAt = now
+        await _loadMessagesFromStoreIfNeeded(onlyIfEmpty: false)
+    }
+
+    func _loadMessagesFromStoreIfNeeded(onlyIfEmpty: Bool) async {
+        if onlyIfEmpty && !conversations.isEmpty {
+            return
+        }
+        guard let key = messageEncryptionKey() else { return }
+        // Only what the merge below keeps anyway (see `fetchConversationWindows`): this runs on
+        // every reload, and fetching the wallet's whole history to trim it to
+        // a window per chat was a recurring multi-second spike while texting, not a launch cost.
+        let messages = await messageStore.fetchConversationWindows(
+            decryptionKey: key,
+            window: Self.inMemoryConversationWindowSize
+        )
+        let meta = await messageStore.fetchConversationMeta()
+        guard !messages.isEmpty || !meta.isEmpty else { return }
+
+        // Debug: count messages with/without content
+        let withContent = messages.filter { !$0.message.isSentPlaceholder }.count
+        let placeholder = messages.count - withContent
+        AppLog.log("[ChatService] loadMessagesFromStore: %d messages (%d with content, %d placeholder)",
+              messages.count, withContent, placeholder)
+
+        // Grouping by contact/txId only needs `messages` (no actor-isolated state) - done here,
+        // ahead of the background hop below, purely to know which contacts are involved, since
+        // that drives the two MainActor-only lookups (contact lookup, pending-read cursor) just
+        // after it. Those are cheap - one call per *conversation*, not per message.
+        var grouped: [String: [String: ChatMessage]] = [:]
+        for stored in messages {
+            let contactAddress = stored.contactAddress
+            let txId = stored.message.txId
+            guard !txId.isEmpty else {
+                continue
+            }
+            // In-place via subscript-with-default (_modify) - taking a `var bucket` copy first made
+            // every insert COW-copy the whole per-contact dictionary (O(n^2) on the main actor).
+            if let existing = grouped[contactAddress, default: [:]][txId] {
+                grouped[contactAddress, default: [:]][txId] = Self.preferMessage(existing, stored.message)
+            } else {
+                grouped[contactAddress, default: [:]][txId] = stored.message
+            }
+        }
+
+        // Deletion tombstones win over stored history: without this filter, a chat the user
+        // deleted would quietly resurrect from Core Data or an archive restore because
+        // getOrCreateContact() below does not consult the tombstone list.
+        let allContactAddresses = Set(grouped.keys).union(meta.keys)
+            .filter { !contactsManager.isAddressDeleted($0) }
+        var contactsByAddress: [String: Contact] = [:]
+        var pendingReadBlockTimeByAddress: [String: Int64] = [:]
+        for contactAddress in allContactAddresses {
+            contactsByAddress[contactAddress] = contactsManager.getOrCreateContact(address: contactAddress)
+            // Also consider a just-recorded read still sitting in ReadStatusSyncManager's
+            // in-memory pending marker (cheap dictionary lookup, no Core Data query) - its actual
+            // CDReadMarker write is debounced up to 15s, so without this a read from moments ago
+            // can still look unread here and wrongly resurrect messages as "new".
+            pendingReadBlockTimeByAddress[contactAddress] = ReadStatusSyncManager.shared.pendingReadCursor(for: contactAddress)?.blockTime ?? 0
+            // Seed the in-memory read cursor from the persisted marker (+ any just-recorded pending
+            // read) so the initial re-sync's `addMessageToConversation` won't re-mark already-read
+            // history as unread. Never lower an existing seed.
+            let seededCursor = max(meta[contactAddress]?.lastReadBlockTime ?? 0, pendingReadBlockTimeByAddress[contactAddress] ?? 0)
+            readCursorByAddress[contactAddress] = max(readCursorByAddress[contactAddress] ?? 0, seededCursor)
+        }
+        let existingConversations = conversations
+        let currentActiveConversationAddress = activeConversationAddress
+
+        // The actual O(total messages in the wallet) sort/dedupe/trim/merge work used to run
+        // synchronously right here on the main actor, on every reload - not just for the one conversation that changed, the *entire* wallet's history,
+        // every time. That's what caused a multi-second UI freeze while actively texting. It's
+        // pure computation (no actor-isolated state), so it's safe to run off the main actor via
+        // `Task.detached`; only assigning the result back to `conversations` needs to happen here.
+        let merged = await Task.detached(priority: .userInitiated) {
+            Self.buildMergedConversations(
+                grouped: grouped,
+                meta: meta,
+                contactsByAddress: contactsByAddress,
+                pendingReadBlockTimeByAddress: pendingReadBlockTimeByAddress,
+                allContactAddresses: allContactAddresses,
+                existingConversations: existingConversations,
+                activeConversationAddress: currentActiveConversationAddress
+            )
+        }.value
+
+        guard !merged.isEmpty else { return }
+        resetOlderHistoryPaginationState(for: allContactAddresses)
+
+        // `merged` was built from `existingConversations`, a snapshot of `conversations` taken
+        // *before* the `Task.detached` await above - if anything mutated the live `conversations`
+        // on the main actor during that gap (pagination splicing in older history via
+        // `loadOlderMessagesPageInternal`, or a new/updated message landing via
+        // `addMessageToConversation`), a blind overwrite here would silently discard it: pagination
+        // would look like the viewport "jumping" back to wherever this stale merge thinks history
+        // ends, and a message whose real content arrived mid-gap could revert to whatever
+        // placeholder `merged` still has for it. Re-merge one more time against `conversations` as
+        // it stands *right now* (not the stale pre-gap snapshot) before assigning - this second
+        // pass is cheap (dedupe/sort of already-small, already-deduped in-memory arrays, not a
+        // disk read), so doing it unconditionally here doesn't reintroduce the original freeze.
+        let latestByAddress = Dictionary(uniqueKeysWithValues: conversations.map { ($0.contact.address, $0) })
+        let reconciled: [Conversation] = merged.map { conv in
+            guard let latest = latestByAddress[conv.contact.address] else { return conv }
+            let combinedMessages = Self.dedupeMessages(latest.messages + conv.messages)
+            let shouldTrim = conv.contact.address != activeConversationAddress
+            let finalMessages = shouldTrim ? Self.trimMessagesForMemory(combinedMessages) : combinedMessages
+            return Conversation(
+                id: conv.id,
+                contact: conv.contact,
+                messages: finalMessages,
+                unreadCount: max(conv.unreadCount, latest.unreadCount)
+            )
+        }
+        let reconciledAddresses = Set(reconciled.map { $0.contact.address })
+        let liveOnly = conversations.filter { !reconciledAddresses.contains($0.contact.address) }
+
+        // Decorate-sort-undecorate: lastMessage walks the conversation's whole message array,
+        // and evaluating it inside the comparator re-ran that walk O(n log n) times per sort.
+        conversations = (reconciled + liveOnly)
+            .map { (key: $0.lastMessage?.timestamp ?? .distantPast, value: $0) }
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+        dropOtherNetworkConversations()
+        rebuildPendingOutgoingQueue()
+        cleanupSuppressedPaymentMessages()
+    }
+
+    /// The heavy per-conversation sort/dedupe/trim/merge work behind `_loadMessagesFromStoreIfNeeded`
+    /// - `nonisolated static` (only value-type parameters, no actor-isolated state) so it can run
+    /// on a background thread via `Task.detached` instead of blocking the main actor. See that
+    /// function's doc comment for why this was split out.
+    nonisolated static func buildMergedConversations(
+        grouped: [String: [String: ChatMessage]],
+        meta: [String: ConversationMeta],
+        contactsByAddress: [String: Contact],
+        pendingReadBlockTimeByAddress: [String: Int64],
+        allContactAddresses: Set<String>,
+        existingConversations: [Conversation],
+        activeConversationAddress: String?
+    ) -> [Conversation] {
+        var loaded: [Conversation] = []
+        for contactAddress in allContactAddresses {
+            guard let contact = contactsByAddress[contactAddress] else { continue }
+            let byTxId = grouped[contactAddress] ?? [:]
+            let conversationId = meta[contactAddress]?.id ?? UUID()
+            let sorted = byTxId.values.sorted(by: isMessageOrderedBefore)
+            let dedupedFull = dedupeMessages(sorted)
+            let dedupedWindow = trimMessagesForMemory(dedupedFull)
+
+            // Compute unread count from the persisted read cursor when there is one
+            let convMeta = meta[contactAddress]
+            let pendingReadBlockTime = pendingReadBlockTimeByAddress[contactAddress] ?? 0
+            let lastReadBlockTime = max(convMeta?.lastReadBlockTime ?? 0, pendingReadBlockTime)
+            let unreadCount: Int
+            if lastReadBlockTime > 0 {
+                // Compute unread as messages with blockTime > lastReadBlockTime (incoming only)
+                unreadCount = dedupedFull.filter { msg in
+                    !msg.isOutgoing && Int64(msg.blockTime) > lastReadBlockTime
+                }.count
+            } else {
+                // Fallback to stored unreadCount (backward compatibility)
+                unreadCount = convMeta?.unreadCount ?? 0
+            }
+
+            loaded.append(Conversation(id: conversationId, contact: contact, messages: dedupedWindow, unreadCount: unreadCount))
+        }
+
+        guard !loaded.isEmpty else { return [] }
+
+        if existingConversations.isEmpty {
+            return loaded
+        }
+
+        var existingByAddress: [String: Conversation] = [:]
+        for conversation in existingConversations {
+            existingByAddress[conversation.contact.address] = conversation
+        }
+
+        var merged: [Conversation] = []
+        var seenAddresses: Set<String> = []
+
+        for loadedConv in loaded {
+            let address = loadedConv.contact.address
+            seenAddresses.insert(address)
+            if var existing = existingByAddress[address] {
+                let mergedMessages = dedupeMessages(existing.messages + loadedConv.messages)
+                let shouldTrim = address != activeConversationAddress
+                let combinedMessages = shouldTrim
+                    ? trimMessagesForMemory(mergedMessages)
+                    : mergedMessages
+
+                // Determine unread count:
+                // - If the store has a read cursor (lastReadBlockTime > 0), use computed count from loaded
+                // - Otherwise prefer in-memory value to prevent race conditions
+                let convMeta = meta[address]
+                let pendingReadBlockTime = pendingReadBlockTimeByAddress[address] ?? 0
+                let storedLastReadBlockTime = max(convMeta?.lastReadBlockTime ?? 0, pendingReadBlockTime)
+                let unreadCount: Int
+                if storedLastReadBlockTime > 0 {
+                    // Stored read cursor - recompute unread from combined messages
+                    unreadCount = combinedMessages.filter { msg in
+                        !msg.isOutgoing && Int64(msg.blockTime) > storedLastReadBlockTime
+                    }.count
+                } else {
+                    // No stored read cursor - prefer in-memory value
+                    unreadCount = existing.unreadCount
+                }
+
+                existing = Conversation(
+                    id: existing.id,
+                    contact: existing.contact,
+                    messages: combinedMessages,
+                    unreadCount: unreadCount
+                )
+                merged.append(existing)
+            } else {
+                merged.append(loadedConv)
+            }
+        }
+
+        for conversation in existingConversations where !seenAddresses.contains(conversation.contact.address) {
+            merged.append(conversation)
+        }
+
+        return merged
+    }
+
+    // `nonisolated static` (not instance methods) - these are pure functions of their arguments
+    // with no dependence on any actor-isolated state, which lets `buildMergedConversations` call
+    // them from a `Task.detached` background thread instead of the main actor. See that function's
+    // doc comment for why that matters.
+    nonisolated static func isMessageOrderedBefore(_ lhs: ChatMessage, _ rhs: ChatMessage) -> Bool {
+        if lhs.blockTime != rhs.blockTime {
+            return lhs.blockTime < rhs.blockTime
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return lhs.timestamp < rhs.timestamp
+        }
+        if lhs.id != rhs.id {
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        return lhs.txId < rhs.txId
+    }
+
+    nonisolated static func preferMessage(_ existing: ChatMessage, _ candidate: ChatMessage) -> ChatMessage {
+        let existingPlaceholder = isPlaceholderContent(existing.content)
+        let candidatePlaceholder = isPlaceholderContent(candidate.content)
+
+        if existingPlaceholder != candidatePlaceholder {
+            return candidatePlaceholder ? existing : candidate
+        }
+
+        if existing.deliveryStatus != candidate.deliveryStatus {
+            if candidate.deliveryStatus.priority != existing.deliveryStatus.priority {
+                return candidate.deliveryStatus.priority > existing.deliveryStatus.priority ? candidate : existing
+            }
+        }
+
+        return isMessageOrderedBefore(existing, candidate) ? candidate : existing
+    }
+
+    nonisolated static func isPlaceholderContent(_ content: String) -> Bool {
+        ChatMessage.isSentPlaceholder(content) || content == "[Encrypted message]"
+    }
+
+    nonisolated static func dedupeMessages(_ messages: [ChatMessage]) -> [ChatMessage] {
+        var byId: [UUID: ChatMessage] = [:]
+        for message in messages {
+            if let existing = byId[message.id] {
+                byId[message.id] = preferMessage(existing, message)
+            } else {
+                byId[message.id] = message
+            }
+        }
+
+        var byTxId: [String: ChatMessage] = [:]
+        for message in byId.values {
+            let key = message.txId.isEmpty ? message.id.uuidString : message.txId
+            if let existing = byTxId[key] {
+                byTxId[key] = preferMessage(existing, message)
+            } else {
+                byTxId[key] = message
+            }
+        }
+        return Array(byTxId.values).sorted(by: isMessageOrderedBefore)
+    }
+
+    /// Reduce in-memory history while preserving protocol-critical/system-critical messages.
+    /// Keeps all handshakes, the newest unsent messages, plus a rolling window of recent regular
+    /// messages.
+    ///
+    /// Handshakes stay sticky without a cap: they are protocol state (the key exchange the whole
+    /// conversation decrypts against), there are only ever a handful per contact, and dropping one
+    /// from memory would make the conversation look un-established until the next full reload.
+    /// Unsent (pending/failed) messages are a different story - each failed photo send carries
+    /// ~20KB of base64 in `content`, and a conversation that keeps failing accumulates them
+    /// without bound, so the old "every unsent message is sticky" rule let exactly the messages
+    /// this trim exists to shed grow forever. They are capped at the newest
+    /// `inMemoryUnsentStickyLimit`; anything older than that is still on disk and still in the
+    /// pending queue, it just doesn't pin itself into memory.
+    nonisolated static let inMemoryUnsentStickyLimit = 50
+
+    nonisolated static func trimMessagesForMemory(_ messages: [ChatMessage]) -> [ChatMessage] {
+        guard messages.count > inMemoryConversationWindowSize else { return messages }
+
+        let handshakes = messages.filter { $0.messageType == .handshake }
+        let unsent = messages
+            .filter { $0.messageType != .handshake && $0.deliveryStatus != .sent }
+            .sorted(by: isMessageOrderedBefore)
+            .suffix(inMemoryUnsentStickyLimit)
+        let sticky = handshakes + unsent
+        let stickyIds = Set(sticky.map(\.id))
+        let recent = messages
+            .filter { !stickyIds.contains($0.id) }
+            .suffix(inMemoryConversationWindowSize)
+
+        return Array((sticky + recent).sorted(by: isMessageOrderedBefore))
+    }
+
+    func rebuildPendingOutgoingQueue() {
+        pendingOutgoingQueue.removeAll()
+        for conversation in conversations {
+            let pending = conversation.messages
+                .filter { $0.isOutgoing && $0.deliveryStatus != .sent }
+                .sorted(by: Self.isMessageOrderedBefore)
+            guard !pending.isEmpty else { continue }
+            let contactAddress = conversation.contact.address
+            pendingOutgoingQueue[contactAddress] = pending.map {
+                PendingOutgoingRef(txId: $0.txId, messageType: $0.messageType, timestamp: $0.timestamp)
+            }
+        }
+    }
+
+    func resetOlderHistoryPaginationState<S: Sequence>(for contactAddresses: S) where S.Element == String {
+        for address in contactAddresses {
+            olderHistoryExhaustedContacts.remove(address)
+            olderHistoryPageTasks[address]?.cancel()
+            olderHistoryPageTasks[address] = nil
+        }
+    }
+
+    /// Record when we do a local save. The store is device-local, so this is bookkeeping only;
+    /// it used to gate a remote-change import that no longer exists.
+    func recordLocalSave() {
+        lastLocalSaveAt = Date()
+    }
+
+    func observeContacts() {
+        contactsCancellable = contactsManager.$contacts
+            .receive(on: RunLoop.main)
+            .sink { [weak self] contacts in
+                self?.syncConversationContacts(with: contacts)
+            }
+    }
+
+    func observeSettings() {
+        settingsCancellable = NotificationCenter.default.publisher(for: .settingsDidChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let settings = notification.object as? AppSettings else { return }
+                self?.cachedSettings = settings
+                Task { @MainActor [weak self] in
+                    await self?.messageStore.applyRetentionInBackground(settings.messageRetention)
+                }
+                self?.saveMessages()
+                self?.refreshPushReliabilityPrerequisites()
+            }
+    }
+
+    func loadPushReliabilityState() {
+        if let raw = userDefaults.string(forKey: pushReliabilityStateKey),
+           let parsed = PushReliabilityState(rawValue: raw) {
+            pushReliabilityState = parsed
+        } else {
+            pushReliabilityState = .disabled
+        }
+        pushConsecutiveMisses = max(0, userDefaults.integer(forKey: pushConsecutiveMissesKey))
+
+        if let ts = userDefaults.object(forKey: pushLastCatchUpSyncAtKey) as? Double {
+            lastCatchUpSyncAt = Date(timeIntervalSince1970: ts)
+        } else {
+            lastCatchUpSyncAt = nil
+        }
+
+        if let ts = userDefaults.object(forKey: pushLastReregisterAtKey) as? Double {
+            lastPushReregisterAt = Date(timeIntervalSince1970: ts)
+        } else {
+            lastPushReregisterAt = nil
+        }
+
+        // Deferred: refreshPushReliabilityPrerequisites() accesses PushNotificationManager.shared,
+        // which in turn accesses ChatService.shared.$conversations during its init.
+        // Running synchronously here would cause a circular static-init crash.
+        Task { @MainActor [weak self] in
+            self?.refreshPushReliabilityPrerequisites()
+        }
+    }
+
+    func persistPushReliabilityState() {
+        userDefaults.set(pushReliabilityState.rawValue, forKey: pushReliabilityStateKey)
+        userDefaults.set(pushConsecutiveMisses, forKey: pushConsecutiveMissesKey)
+        if let lastCatchUpSyncAt {
+            userDefaults.set(lastCatchUpSyncAt.timeIntervalSince1970, forKey: pushLastCatchUpSyncAtKey)
+        } else {
+            userDefaults.removeObject(forKey: pushLastCatchUpSyncAtKey)
+        }
+        if let lastPushReregisterAt {
+            userDefaults.set(lastPushReregisterAt.timeIntervalSince1970, forKey: pushLastReregisterAtKey)
+        } else {
+            userDefaults.removeObject(forKey: pushLastReregisterAtKey)
+        }
+    }
+
+    func isPushChannelOperational() -> Bool {
+        let settings = currentSettings
+        guard settings.notificationMode == .remotePush else { return false }
+
+        let pushManager = PushNotificationManager.shared
+        let status = pushManager.permissionStatus
+        guard status == .authorized || status == .provisional else { return false }
+        guard pushManager.isRegistered else { return false }
+
+        return true
+    }
+
+    func refreshPushReliabilityPrerequisites() {
+        if !isPushChannelOperational() {
+            if pushReliabilityState != .disabled {
+                AppLog.log("[ChatService] Push reliability disabled (push mode not operational)")
+            }
+            pushReliabilityState = .disabled
+            pushConsecutiveMisses = 0
+            for task in pushObservationTasks.values {
+                task.cancel()
+            }
+            pushObservationTasks.removeAll()
+            pendingPushObservations.removeAll()
+            persistPushReliabilityState()
+            return
+        }
+
+        if pushReliabilityState == .disabled {
+            pushReliabilityState = .unknown
+            pushConsecutiveMisses = 0
+            AppLog.log("[ChatService] Push reliability moved to unknown (operational)")
+            persistPushReliabilityState()
+        }
+    }
+
+    func prunePushReliabilityCaches(now: Date) {
+        let cutoff = now.addingTimeInterval(-pushObservationRetention)
+        pushSeenByTxId = pushSeenByTxId.filter { $0.value >= cutoff }
+
+        let staleObservations = pendingPushObservations.values
+            .filter { $0.observedAt < cutoff }
+            .map(\.txId)
+        for txId in staleObservations {
+            pendingPushObservations.removeValue(forKey: txId)
+            if let task = pushObservationTasks.removeValue(forKey: txId) {
+                task.cancel()
+            }
+        }
+    }
+
+    func shouldTrackPushReliability(for senderAddress: String) -> Bool {
+        let normalized = senderAddress.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+
+        let settings = currentSettings
+        guard settings.notificationMode == .remotePush else { return false }
+
+        let eligible = Set(pushEligibleConversationAddresses(settings: settings))
+        guard eligible.contains(normalized) else { return false }
+
+        let contact = contactsManager.getContact(byAddress: normalized)
+        return settings.shouldDeliverIncomingNotification(for: contact)
+    }
+
+    func trackIncomingUtxoForPushReliability(txId: String, senderAddress: String) {
+        refreshPushReliabilityPrerequisites()
+        guard pushReliabilityState != .disabled else { return }
+        guard shouldTrackPushReliability(for: senderAddress) else { return }
+
+        let normalizedTxId = txId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTxId.isEmpty else { return }
+
+        let now = Date()
+        prunePushReliabilityCaches(now: now)
+
+        if let pushSeenAt = pushSeenByTxId[normalizedTxId],
+           pushSeenAt.timeIntervalSince(now) >= -pushLeadMatchTolerance {
+            applyPushObservationOutcome(
+                txId: normalizedTxId,
+                senderAddress: senderAddress,
+                didReceivePush: true
+            )
+            return
+        }
+
+        if pendingPushObservations[normalizedTxId] != nil {
+            return
+        }
+
+        pendingPushObservations[normalizedTxId] = PendingPushObservation(
+            txId: normalizedTxId,
+            senderAddress: senderAddress,
+            observedAt: now
+        )
+        schedulePushObservationEvaluation(for: normalizedTxId)
+    }
+
+    func schedulePushObservationEvaluation(for txId: String) {
+        if let task = pushObservationTasks.removeValue(forKey: txId) {
+            task.cancel()
+        }
+        let delayNs = UInt64(pushObservationGraceInterval * 1_000_000_000)
+        pushObservationTasks[txId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayNs)
+            self?.evaluatePendingPushObservation(txId: txId)
+        }
+    }
+
+    func evaluatePendingPushObservation(txId: String) {
+        refreshPushReliabilityPrerequisites()
+        guard pushReliabilityState != .disabled else { return }
+
+        guard let observation = pendingPushObservations.removeValue(forKey: txId) else {
+            pushObservationTasks.removeValue(forKey: txId)
+            return
+        }
+
+        if let task = pushObservationTasks.removeValue(forKey: txId) {
+            task.cancel()
+        }
+
+        guard shouldTrackPushReliability(for: observation.senderAddress) else {
+            return
+        }
+
+        let didReceivePush: Bool
+        if let pushSeenAt = pushSeenByTxId[txId] {
+            didReceivePush = pushSeenAt.timeIntervalSince(observation.observedAt) >= -pushLeadMatchTolerance
+        } else {
+            didReceivePush = false
+        }
+
+        applyPushObservationOutcome(
+            txId: txId,
+            senderAddress: observation.senderAddress,
+            didReceivePush: didReceivePush
+        )
+    }
+
+    func applyPushObservationOutcome(
+        txId: String,
+        senderAddress: String,
+        didReceivePush: Bool
+    ) {
+        refreshPushReliabilityPrerequisites()
+        guard pushReliabilityState != .disabled else { return }
+
+        if didReceivePush {
+            pushConsecutiveMisses = 0
+            if pushReliabilityState != .reliable {
+                transitionPushReliabilityState(
+                    to: .reliable,
+                    reason: "push matched tx \(String(txId.prefix(12))) from \(String(senderAddress.suffix(10)))"
+                )
+            } else {
+                persistPushReliabilityState()
+            }
+            return
+        }
+
+        pushConsecutiveMisses += 1
+        AppLog.log("[ChatService] Push miss for tx=%@ sender=%@ misses=%d",
+              String(txId.prefix(12)),
+              String(senderAddress.suffix(10)),
+              pushConsecutiveMisses)
+        if pushConsecutiveMisses >= 3 {
+            transitionPushReliabilityState(
+                to: .unreliable,
+                reason: "3 consecutive push misses"
+            )
+        } else {
+            persistPushReliabilityState()
+        }
+    }
+
+    func transitionPushReliabilityState(to newState: PushReliabilityState, reason: String) {
+        guard pushReliabilityState != newState else { return }
+        let oldState = pushReliabilityState
+        pushReliabilityState = newState
+        if newState == .reliable || newState == .disabled {
+            pushConsecutiveMisses = 0
+        }
+        persistPushReliabilityState()
+
+        AppLog.log("[ChatService] Push reliability state %@ -> %@ (%@)",
+              oldState.rawValue,
+              newState.rawValue,
+              reason)
+
+        if newState == .unreliable {
+            Task { [weak self] in
+                await self?.handlePushMarkedUnreliable(reason: reason)
+            }
+        }
+    }
+
+    func handlePushMarkedUnreliable(reason: String) async {
+        await maybeRunCatchUpSync(trigger: .pushMarkedUnreliable, force: true)
+
+        let now = Date()
+        if let lastPushReregisterAt,
+           now.timeIntervalSince(lastPushReregisterAt) < pushReregisterCooldown {
+            AppLog.log("[ChatService] Skipping push re-register - cooldown active")
+            return
+        }
+
+        lastPushReregisterAt = now
+        persistPushReliabilityState()
+        await PushNotificationManager.shared.forceReregister(reason: reason)
+    }
+
+    func syncConversationContacts(with contacts: [Contact]) {
+        var byId: [UUID: Contact] = [:]
+        byId.reserveCapacity(contacts.count)
+        var byAddress: [String: Contact] = [:]
+        byAddress.reserveCapacity(contacts.count)
+        for contact in contacts {
+            byId[contact.id] = contact
+            byAddress[contact.address.lowercased()] = contact
+        }
+
+        let updated = conversations.map { conversation -> Conversation in
+            let refreshed = byId[conversation.contact.id] ??
+                byAddress[conversation.contact.address.lowercased()]
+            guard let refreshed else {
+                return conversation
+            }
+            if refreshed == conversation.contact {
+                return conversation
+            }
+            return Conversation(
+                id: conversation.id,
+                contact: refreshed,
+                messages: conversation.messages,
+                unreadCount: conversation.unreadCount
+            )
+        }
+        if updated != conversations {
+            conversations = updated
+        }
+    }
+
+    func currentTimeMs() -> UInt64 {
+        UInt64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    func handshakeSyncObjectKey(direction: String, address: String) -> String {
+        "hs|\(direction)|\(address.lowercased())"
+    }
+
+    func contextualSyncObjectKey(
+        direction: String,
+        queryAddress: String,
+        alias: String,
+        contactAddress: String? = nil
+    ) -> String {
+        var key = "ctx|\(direction)|\(queryAddress.lowercased())|\(alias)"
+        if let contactAddress, !contactAddress.isEmpty {
+            key += "|\(contactAddress.lowercased())"
+        }
+        return key
+    }
+
+    /// `rewindMs` parameterizes the reorg rewind window by caller: the high-frequency live-tail
+    /// paths (open-chat poll, foreground sweep) pass `liveTailReorgBufferMs` (90s) so they do not
+    /// re-download a 10-minute window every few seconds; catch-up syncs omit it and keep the full
+    /// `syncReorgBufferMs`. Cursors only ever ADVANCE on their own (see `advanceSyncCursor`) -
+    /// this only changes where a fetch STARTS, and txId dedupe at insert makes the overlap free.
+    ///
+    /// The rewind is unconditional. This used to start at `lastFetched + 1` once the cursor was
+    /// older than the buffer, on the theory that a quiet contact had nothing to re-download. But
+    /// the cursor is the newest block time the indexer has RETURNED, and the indexer does not
+    /// surface messages in block-time order - acceptance in the DAG is not monotonic, and an
+    /// indexer catching up serves what it has. A reply could be returned before the message it
+    /// replied to; the cursor advanced past the original; the buffer elapsed; and from then on
+    /// every fetch started strictly after it. One message missing from a thread for good, with
+    /// everything after it delivered - which is exactly what a user saw, tapping a quote whose
+    /// original their device had never received. The buffer bounds how late the indexer may be;
+    /// `recoverMissingReplyOriginalIfNeeded` covers anything later than that.
+    func syncStartBlockTime(for objectKey: String, fallbackBlockTime: UInt64, nowMs: UInt64, rewindMs: UInt64? = nil) -> UInt64 {
+        let reorgRewindMs = rewindMs ?? syncReorgBufferMs
+        guard let cursor = syncObjectCursors[objectKey], cursor.lastFetchedBlockTime > 0 else {
+            return fallbackBlockTime
+        }
+        let lastFetchedBlockTime = cursor.lastFetchedBlockTime
+        return lastFetchedBlockTime > reorgRewindMs ? lastFetchedBlockTime - reorgRewindMs : 0
+    }
+
+    /// Pulls every sync cursor that belongs to a contact - both directions - back to `blockTime`,
+    /// so the next fetch re-covers a window the normal rewind has already left behind. The only
+    /// way a cursor ever moves backwards; see `recoverMissingReplyOriginalIfNeeded` for why.
+    func rewindSyncCursors(forContact contactAddress: String, to blockTime: UInt64) {
+        let suffix = "|\(contactAddress.lowercased())"
+        var rewound = false
+        for (key, cursor) in syncObjectCursors where key.hasPrefix("ctx|") && key.hasSuffix(suffix) {
+            guard cursor.lastFetchedBlockTime > blockTime else { continue }
+            syncObjectCursors[key] = SyncObjectCursor(lastFetchedBlockTime: blockTime)
+            rewound = true
+        }
+        guard rewound else { return }
+        syncObjectCursorsDirty = true
+        saveSyncObjectCursorsIfNeeded()
+    }
+
+    func advanceSyncCursor(for objectKey: String, maxBlockTime: UInt64?) {
+        guard let maxBlockTime, maxBlockTime > 0 else { return }
+        let previous = syncObjectCursors[objectKey]?.lastFetchedBlockTime ?? 0
+        guard maxBlockTime > previous else { return }
+        syncObjectCursors[objectKey] = SyncObjectCursor(lastFetchedBlockTime: maxBlockTime)
+        syncObjectCursorsDirty = true
+        if !isSyncInProgress {
+            saveSyncObjectCursorsIfNeeded()
+        }
+    }
+
+    // MARK: - Wallet import baseline
+
+    private func walletImportBaselineKey(for address: String) -> String {
+        "kachat_wallet_import_baseline_\(address.lowercased())"
+    }
+
+    /// Stamps "now" as the import moment for a wallet that is NEW to this device. Called by
+    /// `WalletManager.importWallet` inside its `isNewWallet` branch only, so a same-account
+    /// re-login or a saved-account switch never moves an existing baseline forward (messages
+    /// that arrived while logged out must still land unread there). Keyed per wallet address,
+    /// so it survives wallet switches and `resetForNewWallet`'s fixed-key cleanup.
+    func recordWalletImportBaseline(address: String) {
+        guard !address.isEmpty else { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        userDefaults.set(nowMs, forKey: walletImportBaselineKey(for: address))
+        cachedWalletImportBaseline = (address, nowMs)
+    }
+
+    /// The import baseline (ms) for `address`, or 0 when none was ever recorded - wallets that
+    /// predate the baseline get 0, which disables the backfill gating entirely.
+    func walletImportBaselineMs(for address: String?) -> Int64 {
+        guard let address, !address.isEmpty else { return 0 }
+        if let cached = cachedWalletImportBaseline, cached.address == address {
+            return cached.blockTimeMs
+        }
+        let stored = Int64(userDefaults.integer(forKey: walletImportBaselineKey(for: address)))
+        cachedWalletImportBaseline = (address, stored)
+        return stored
+    }
+
+    func clearSyncObjectCursors() {
+        syncObjectCursors = [:]
+        syncObjectCursorsDirty = false
+        userDefaults.removeObject(forKey: syncCursorsKey)
+    }
+
+    /// Drops only the INCOMING-direction cursors for the given contacts, so the next fetch for
+    /// those objects starts from the caller-supplied fallback instead of the stored block time.
+    /// Incoming contextual keys are "ctx|in|<contactAddress>|<alias>[|<contactAddress>]" - the
+    /// query address of an incoming fetch is the contact itself, so matching on the third
+    /// component covers both the current and the legacy (no trailing contact) key shapes.
+    /// With `includeIncomingHandshakes` the wallet-global "hs|in|..." cursor is dropped too.
+    /// Outgoing cursors are deliberately left alone: the wipe-and-resync flow never deletes
+    /// outgoing messages, so their windows stay covered.
+    func removeIncomingSyncCursors(for contactAddresses: [String], includeIncomingHandshakes: Bool) {
+        let lowered = Set(contactAddresses.map { $0.lowercased() })
+        var removedAny = false
+        for key in Array(syncObjectCursors.keys) {
+            let parts = key.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { continue }
+            let isIncomingContextual = parts[0] == "ctx" && parts[1] == "in"
+                && parts.count >= 3 && lowered.contains(parts[2].lowercased())
+            let isIncomingHandshake = includeIncomingHandshakes && parts[0] == "hs" && parts[1] == "in"
+            if isIncomingContextual || isIncomingHandshake {
+                syncObjectCursors.removeValue(forKey: key)
+                removedAny = true
+            }
+        }
+        if removedAny {
+            syncObjectCursorsDirty = true
+            saveSyncObjectCursorsIfNeeded()
+        }
+    }
+
+    func loadSyncObjectCursors() {
+        guard let data = userDefaults.data(forKey: syncCursorsKey),
+              let decoded = try? JSONDecoder().decode([String: SyncObjectCursor].self, from: data) else {
+            return
+        }
+        syncObjectCursors = decoded
+    }
+
+    func saveSyncObjectCursorsIfNeeded() {
+        guard syncObjectCursorsDirty else { return }
+        guard let data = try? JSONEncoder().encode(syncObjectCursors) else { return }
+        userDefaults.set(data, forKey: syncCursorsKey)
+        syncObjectCursorsDirty = false
+    }
+
+    func loadHiddenPaymentTxIds() {
+        guard let data = userDefaults.data(forKey: hiddenPaymentTxIdsKey),
+              let decoded = try? JSONDecoder().decode([String: UInt64].self, from: data) else {
+            hiddenPaymentTxIdTimestamps = [:]
+            return
+        }
+
+        hiddenPaymentTxIdTimestamps = decoded.reduce(into: [:]) { partial, item in
+            let txId = item.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !txId.isEmpty else { return }
+            partial[txId] = item.value
+        }
+        pruneHiddenPaymentTxIds()
+    }
+
+    func saveHiddenPaymentTxIds() {
+        guard let data = try? JSONEncoder().encode(hiddenPaymentTxIdTimestamps) else { return }
+        userDefaults.set(data, forKey: hiddenPaymentTxIdsKey)
+    }
+
+    func pruneHiddenPaymentTxIds(nowMs: UInt64? = nil) {
+        guard !hiddenPaymentTxIdTimestamps.isEmpty else { return }
+        let now = nowMs ?? currentTimeMs()
+        let cutoff = now > hiddenPaymentTxMaxAgeMs ? now - hiddenPaymentTxMaxAgeMs : 0
+        let beforeCount = hiddenPaymentTxIdTimestamps.count
+        hiddenPaymentTxIdTimestamps = hiddenPaymentTxIdTimestamps.filter { $0.value >= cutoff }
+        if hiddenPaymentTxIdTimestamps.count != beforeCount {
+            saveHiddenPaymentTxIds()
+        }
+    }
+
+    func isSuppressedPaymentTxId(_ txId: String) -> Bool {
+        let normalized = txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        return hiddenPaymentTxIdTimestamps[normalized] != nil
+    }
+
+    func registerKNSTransferChatHint(
+        txId: String,
+        domainName: String,
+        domainId: String,
+        counterpartyAddress: String,
+        isOutgoing: Bool,
+        timestampMs: UInt64? = nil
+    ) {
+        let normalizedTxId = txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDomain = domainName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDomainId = domainId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedCounterparty = counterpartyAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTxId.isEmpty,
+              !normalizedDomain.isEmpty,
+              !normalizedDomainId.isEmpty,
+              !normalizedCounterparty.isEmpty else {
+            return
+        }
+
+        knsTransferHintsByTxId[normalizedTxId] = KNSTransferChatHint(
+            txId: txId,
+            domainName: normalizedDomain,
+            domainId: normalizedDomainId,
+            counterpartyAddress: normalizedCounterparty,
+            isOutgoing: isOutgoing,
+            timestampMs: timestampMs ?? currentTimeMs()
+        )
+    }
+
+    func knsTransferChatHint(for txId: String) -> KNSTransferChatHint? {
+        let normalizedTxId = txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedTxId.isEmpty else { return nil }
+        return knsTransferHintsByTxId[normalizedTxId]
+    }
+
+    func removeKNSTransferChatHint(for txId: String) {
+        let normalizedTxId = txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedTxId.isEmpty else { return }
+        knsTransferHintsByTxId.removeValue(forKey: normalizedTxId)
+    }
+
+    func registerSuppressedPaymentTxIds(_ txIds: [String], reason: String) {
+        guard !txIds.isEmpty else { return }
+        pruneHiddenPaymentTxIds()
+
+        let now = currentTimeMs()
+        var normalizedTxIds = Set<String>()
+        var added = 0
+
+        for txId in txIds {
+            let normalized = txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty else { continue }
+            normalizedTxIds.insert(normalized)
+            if hiddenPaymentTxIdTimestamps[normalized] == nil {
+                added += 1
+            }
+            hiddenPaymentTxIdTimestamps[normalized] = now
+        }
+
+        guard !normalizedTxIds.isEmpty else { return }
+        saveHiddenPaymentTxIds()
+
+        let removed = removeSuppressedPaymentMessages(txIds: normalizedTxIds)
+        if added > 0 || removed > 0 {
+            AppLog.log(
+                "[ChatService] Registered %d suppressed payment tx ids (%@), removed=%d",
+                normalizedTxIds.count,
+                reason,
+                removed
+            )
+        }
+    }
+
+    @discardableResult
+    func removeSuppressedPaymentMessages(txIds: Set<String>) -> Int {
+        guard !txIds.isEmpty else { return 0 }
+        guard !conversations.isEmpty else { return 0 }
+
+        var removedCount = 0
+        var removedConversationCount = 0
+
+        for index in conversations.indices.reversed() {
+            let removedTxIds = conversations[index].messages.compactMap { message -> String? in
+                guard message.messageType == .payment else { return nil }
+                let normalized = message.txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return txIds.contains(normalized) ? message.txId : nil
+            }
+            guard !removedTxIds.isEmpty else { continue }
+
+            let contactAddress = conversations[index].contact.address
+            conversations[index].messages.removeAll { message in
+                guard message.messageType == .payment else { return false }
+                let normalized = message.txId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return txIds.contains(normalized)
+            }
+            removedCount += removedTxIds.count
+
+            for txId in removedTxIds {
+                clearIncomingResolutionTracking(txId: txId)
+            }
+
+            if conversations[index].messages.isEmpty {
+                let contact = contactsManager.getContact(byAddress: contactAddress) ?? conversations[index].contact
+                if contact.isAutoAdded {
+                    conversations.remove(at: index)
+                    removedConversationCount += 1
+                    continue
+                }
+                conversations[index].unreadCount = 0
+            } else {
+                let unreadIncomingCount = conversations[index].messages.reduce(0) { partial, message in
+                    partial + (message.isOutgoing ? 0 : 1)
+                }
+                conversations[index].unreadCount = min(conversations[index].unreadCount, unreadIncomingCount)
+            }
+
+            markConversationDirty(contactAddress)
+        }
+
+        if removedCount > 0 {
+            saveMessages()
+            AppLog.log(
+                "[ChatService] Removed %d suppressed payment message(s), droppedConversations=%d",
+                removedCount,
+                removedConversationCount
+            )
+        }
+
+        return removedCount
+    }
+
+    func cleanupSuppressedPaymentMessages() {
+        guard !hiddenPaymentTxIdTimestamps.isEmpty else { return }
+        _ = removeSuppressedPaymentMessages(txIds: Set(hiddenPaymentTxIdTimestamps.keys))
+    }
+
+    func updateLastPollTime(_ blockTime: UInt64) {
+        if isSyncInProgress {
+            if let current = syncMaxBlockTime {
+                syncMaxBlockTime = max(current, blockTime)
+            } else {
+                syncMaxBlockTime = blockTime
+            }
+            return
+        }
+        lastPollTime = blockTime
+        userDefaults.set(Int(blockTime), forKey: lastPollTimeKey)
+    }
+
+    func scheduleBadgeUpdate() {
+        badgeUpdateTask?.cancel()
+        badgeUpdateTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            updateAppBadge()
+        }
+    }
+
+    func updateAppBadge() {
+        // Message Requests and blocked chats don't count: an unaccepted sender must not be able
+        // to keep ringing the badge (NO_HANDSHAKE_MESSAGING.md).
+        let totalUnread = conversations.reduce(0) { total, conversation in
+            guard isConversationVisibleInChatList(conversation) else { return total }
+            return total + max(0, conversation.unreadCount)
+        } + GroupChatService.shared.totalGroupUnreadCount
+        SharedDataManager.setUnreadCount(totalUnread)
+        if #available(iOS 16.0, *) {
+            UNUserNotificationCenter.current().setBadgeCount(totalUnread)
+        } else {
+            UIApplication.shared.applicationIconBadgeNumber = totalUnread
+        }
+    }
+
+    func beginSyncBlockTime() {
+        if !isSyncInProgress { isSyncInProgress = true }
+        syncMaxBlockTime = lastPollTime
+    }
+
+    func endSyncBlockTime(success: Bool) {
+        defer {
+            if isSyncInProgress { isSyncInProgress = false }
+            syncMaxBlockTime = nil
+        }
+
+        if success, let candidate = syncMaxBlockTime, candidate > lastPollTime {
+            lastPollTime = candidate
+            userDefaults.set(Int(candidate), forKey: lastPollTimeKey)
+        }
+        if needsMessageStoreSyncAfterBatch {
+            needsMessageStoreSyncAfterBatch = false
+            saveMessages()
+        }
+        saveSyncObjectCursorsIfNeeded()
+        flushPendingLastMessageUpdates()
+    }
+
+    func messageEncryptionKey() -> SymmetricKey? {
+        guard var privateKey = WalletManager.shared.getPrivateKey() else { return nil }
+        var keyData = CryptoUtils.sha256(privateKey)
+        privateKey.zeroOut()
+        let key = SymmetricKey(data: keyData)
+        keyData.zeroOut()
+        return key
+    }
+
+    func scheduleMessageStoreSync() {
+        if let lastScheduled = lastMessageStoreSyncScheduledAt,
+           !isSyncInProgress,
+           Date().timeIntervalSince(lastScheduled) < messageStoreSyncMinInterval {
+            return
+        }
+        // The active wallet at schedule time. If the user switches/imports a different account
+        // during the debounce window below, we must not flush this snapshot into the new wallet's
+        // store. Upstream sync guards already keep foreign messages out of `conversations`; this is
+        // the final backstop right at the persistence boundary. See ChatService.isActiveWallet.
+        let scheduledOwner = WalletManager.shared.currentWallet?.publicAddress
+        messageSyncTask?.cancel()
+        lastMessageStoreSyncScheduledAt = Date()
+        messageSyncTask = Task { [weak self] in
+            // Reduced delay from 600ms to 150ms to minimize race condition window
+            // where in-memory changes (e.g., marking as read) get overwritten by
+            // stale Core Data reloads before save completes
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self else { return }
+            guard let owner = scheduledOwner, self.isActiveWallet(owner) else { return }
+            guard let key = self.messageEncryptionKey() else { return }
+            let conversationsSnapshot = await MainActor.run { self.conversations }
+            let dirtyAddresses = await MainActor.run { () -> Set<String> in
+                let snapshot = self.dirtyConversationAddresses
+                self.dirtyConversationAddresses.removeAll()
+                return snapshot
+            }
+            let now = Date()
+            let shouldRunMaintenance = now.timeIntervalSince(self.lastFullStoreMaintenanceAt) >= self.fullStoreMaintenanceInterval
+            let conversationsToSync: [Conversation]
+            let performMaintenance: Bool
+            if shouldRunMaintenance {
+                conversationsToSync = conversationsSnapshot
+                performMaintenance = true
+            } else if !dirtyAddresses.isEmpty {
+                conversationsToSync = conversationsSnapshot.filter { dirtyAddresses.contains($0.contact.address) }
+                performMaintenance = false
+            } else {
+                conversationsToSync = []
+                performMaintenance = false
+            }
+
+            if conversationsToSync.isEmpty { return }
+
+            let didWrite = await self.messageStore.syncFromConversations(
+                conversationsToSync,
+                encryptionKey: key,
+                retention: SettingsViewModel.loadSettings().messageRetention,
+                performMaintenance: performMaintenance
+            )
+            if performMaintenance {
+                await MainActor.run {
+                    self.lastFullStoreMaintenanceAt = now
+                }
+            }
+
+            if didWrite {
+                await MainActor.run {
+                    self.recordLocalSave()
+                }
+            }
+        }
+    }
+
+    func saveMessages() {
+        scheduleMessageStoreSync()
+    }
+
+    func markConversationDirty(_ contactAddress: String) {
+        dirtyConversationAddresses.insert(contactAddress)
+    }
+
+    func enqueuePendingOutgoing(contactAddress: String, pendingTxId: String, messageType: ChatMessage.MessageType, timestamp: Date) {
+        var queue = pendingOutgoingQueue[contactAddress, default: []]
+        if !queue.contains(where: { $0.txId == pendingTxId }) {
+            queue.append(PendingOutgoingRef(txId: pendingTxId, messageType: messageType, timestamp: timestamp))
+            queue.sort { $0.timestamp < $1.timestamp }
+            pendingOutgoingQueue[contactAddress] = queue
+        }
+    }
+
+    func removePendingOutgoing(contactAddress: String, pendingTxId: String) {
+        guard var queue = pendingOutgoingQueue[contactAddress] else { return }
+        queue.removeAll { $0.txId == pendingTxId }
+        if queue.isEmpty {
+            pendingOutgoingQueue.removeValue(forKey: contactAddress)
+        } else {
+            pendingOutgoingQueue[contactAddress] = queue
+        }
+    }
+
+    func removePendingOutgoingGlobally(_ pendingTxId: String) {
+        for (contactAddress, queue) in pendingOutgoingQueue {
+            let filtered = queue.filter { $0.txId != pendingTxId }
+            if filtered.isEmpty {
+                pendingOutgoingQueue.removeValue(forKey: contactAddress)
+            } else {
+                pendingOutgoingQueue[contactAddress] = filtered
+            }
+        }
+    }
+
+    func popPendingOutgoing(contactAddress: String, messageType: ChatMessage.MessageType) -> String? {
+        guard var queue = pendingOutgoingQueue[contactAddress] else { return nil }
+        if let index = queue.firstIndex(where: { $0.messageType == messageType }) {
+            let ref = queue.remove(at: index)
+            if queue.isEmpty {
+                pendingOutgoingQueue.removeValue(forKey: contactAddress)
+            } else {
+                pendingOutgoingQueue[contactAddress] = queue
+            }
+            return ref.txId
+        }
+        return nil
+    }
+
+    func updatePendingFromQueue(contactAddress: String, newTxId: String, messageType: ChatMessage.MessageType) -> Bool {
+        guard let queue = pendingOutgoingQueue[contactAddress], !queue.isEmpty else {
+            return false
+        }
+        guard let convIndex = conversations.firstIndex(where: { $0.contact.address == contactAddress }) else {
+            return false
+        }
+        let pendingSet = Set(conversations[convIndex].messages.map { $0.txId })
+        for ref in queue where ref.messageType == messageType {
+            if pendingSet.contains(ref.txId) {
+                if updatePendingMessage(ref.txId, withRealTxId: newTxId, contactAddress: contactAddress) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    func queueLastMessageUpdate(contactId: UUID, date: Date) {
+        if let existing = pendingLastMessageUpdates[contactId], existing >= date {
+            return
+        }
+        pendingLastMessageUpdates[contactId] = date
+        pendingLastMessageUpdateWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.flushPendingLastMessageUpdates()
+        }
+        pendingLastMessageUpdateWorkItem = workItem
+        let delay = isSyncInProgress ? max(lastMessageBatchDelay, 1.5) : lastMessageBatchDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func flushPendingLastMessageUpdates() {
+        guard !pendingLastMessageUpdates.isEmpty else { return }
+        let updates = pendingLastMessageUpdates
+        pendingLastMessageUpdates.removeAll()
+        for (contactId, date) in updates {
+            contactsManager.updateContactLastMessage(contactId, at: date)
+        }
+    }
+
+    // MARK: - Draft Storage
+
+    func loadMessageDrafts() {
+        guard let data = userDefaults.data(forKey: draftsKey),
+              let drafts = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return
+        }
+        messageDrafts = drafts
+    }
+
+    func saveMessageDrafts() {
+        guard let data = try? JSONEncoder().encode(messageDrafts) else { return }
+        userDefaults.set(data, forKey: draftsKey)
+    }
+
+    func draft(for contactAddress: String) -> String {
+        messageDrafts[contactAddress] ?? ""
+    }
+
+    func setDraft(_ text: String, for contactAddress: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            messageDrafts.removeValue(forKey: contactAddress)
+        } else {
+            messageDrafts[contactAddress] = text
+        }
+        // The in-memory dict is updated synchronously above (so draft(for:) is always current);
+        // the actual JSON-encode + UserDefaults write is debounced off the per-keystroke path -
+        // writing it on every character was a real typing-lag source. Flushed on background
+        // (flushPendingDraftSave) so nothing is lost.
+        draftSaveTask?.cancel()
+        draftSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.saveMessageDrafts()
+        }
+    }
+
+    /// Writes any pending debounced draft immediately (call on app background so an in-flight draft
+    /// isn't lost if the app is then terminated).
+    func flushPendingDraftSave() {
+        guard draftSaveTask != nil else { return }
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        saveMessageDrafts()
+    }
+
+    func clearDraft(for contactAddress: String) {
+        if messageDrafts.removeValue(forKey: contactAddress) != nil {
+            saveMessageDrafts()
+        }
+    }
+
+    // MARK: - Alias Storage
+
+    func loadConversationAliases() {
+        guard let data = userDefaults.data(forKey: aliasesKey) else {
+            return
+        }
+        if let decoded = decodeAliasSetMap(from: data) {
+            conversationAliases = decoded
+        } else if let legacy = try? JSONDecoder().decode([String: String].self, from: data) {
+            conversationAliases = legacy.mapValues { [$0] }.mapValues { Set($0) }
+            conversationPrimaryAliases = legacy
+        }
+        if let primaryData = userDefaults.data(forKey: conversationPrimaryAliasesKey),
+           let primary = try? JSONDecoder().decode([String: String].self, from: primaryData) {
+            conversationPrimaryAliases = primary
+        }
+        if let updatedData = userDefaults.data(forKey: conversationAliasUpdatedAtKey),
+           let updated = try? JSONDecoder().decode([String: UInt64].self, from: updatedData) {
+            conversationAliasUpdatedAt = updated
+        }
+        rebuildPrimaryAliasesIfNeeded()
+        AppLog.log("%@", "[ChatService] Loaded \(conversationAliases.count) conversation aliases")
+    }
+
+    func saveConversationAliases() {
+        guard let data = try? JSONEncoder().encode(encodeAliasSetMap(conversationAliases)) else { return }
+        userDefaults.set(data, forKey: aliasesKey)
+        if let primaryData = try? JSONEncoder().encode(conversationPrimaryAliases) {
+            userDefaults.set(primaryData, forKey: conversationPrimaryAliasesKey)
+        }
+        if let updatedData = try? JSONEncoder().encode(conversationAliasUpdatedAt) {
+            userDefaults.set(updatedData, forKey: conversationAliasUpdatedAtKey)
+        }
+        Task {
+            await PushNotificationManager.shared.updateWatchedAddresses()
+        }
+    }
+
+    func knownIncomingAliases() -> [String] {
+        let addresses = Set(conversationPrimaryAliases.keys).union(conversationAliases.keys).union(routingStates.keys)
+        return knownIncomingAliases(forAddresses: addresses)
+    }
+
+    func knownIncomingAliases(forAddresses addresses: Set<String>) -> [String] {
+        let normalizedAddresses = Set(addresses.map { $0.lowercased() })
+        guard !normalizedAddresses.isEmpty else { return [] }
+
+        var aliasSet = Set<String>()
+        for (address, alias) in conversationPrimaryAliases where normalizedAddresses.contains(address.lowercased()) {
+            aliasSet.insert(alias)
+        }
+        for (address, set) in conversationAliases where normalizedAddresses.contains(address.lowercased()) {
+            if let selected = set.sorted().first {
+                aliasSet.insert(selected)
+            }
+        }
+        // Include deterministic incoming aliases from routing states
+        for (address, state) in routingStates where normalizedAddresses.contains(address.lowercased()) {
+            aliasSet.insert(state.deterministicMyAlias)
+        }
+        return Array(aliasSet)
+    }
+
+    func loadOurAliases() {
+        guard let data = userDefaults.data(forKey: ourAliasesKey) else {
+            return
+        }
+        if let decoded = decodeAliasSetMap(from: data) {
+            ourAliases = decoded
+        } else if let legacy = try? JSONDecoder().decode([String: String].self, from: data) {
+            ourAliases = legacy.mapValues { [$0] }.mapValues { Set($0) }
+            ourPrimaryAliases = legacy
+        }
+        if let primaryData = userDefaults.data(forKey: ourPrimaryAliasesKey),
+           let primary = try? JSONDecoder().decode([String: String].self, from: primaryData) {
+            ourPrimaryAliases = primary
+        }
+        if let updatedData = userDefaults.data(forKey: ourAliasUpdatedAtKey),
+           let updated = try? JSONDecoder().decode([String: UInt64].self, from: updatedData) {
+            ourAliasUpdatedAt = updated
+        }
+        rebuildPrimaryAliasesIfNeeded()
+        AppLog.log("%@", "[ChatService] Loaded \(ourAliases.count) of our aliases")
+    }
+
+    func loadConversationIds() {
+        guard let data = userDefaults.data(forKey: conversationIdsKey),
+              let ids = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return
+        }
+        conversationIds = ids
+        AppLog.log("%@", "[ChatService] Loaded \(ids.count) conversation ids")
+    }
+
+    func saveOurAliases() {
+        guard let data = try? JSONEncoder().encode(encodeAliasSetMap(ourAliases)) else { return }
+        userDefaults.set(data, forKey: ourAliasesKey)
+        if let primaryData = try? JSONEncoder().encode(ourPrimaryAliases) {
+            userDefaults.set(primaryData, forKey: ourPrimaryAliasesKey)
+        }
+        if let updatedData = try? JSONEncoder().encode(ourAliasUpdatedAt) {
+            userDefaults.set(updatedData, forKey: ourAliasUpdatedAtKey)
+        }
+    }
+
+    func saveConversationIds() {
+        guard let data = try? JSONEncoder().encode(conversationIds) else { return }
+        userDefaults.set(data, forKey: conversationIdsKey)
+    }
+
+    // MARK: - Routing State Persistence
+
+    func loadRoutingStates() {
+        guard let data = userDefaults.data(forKey: routingStatesKey) else { return }
+        if let decoded = try? JSONDecoder().decode([String: ConversationRoutingState].self, from: data) {
+            routingStates = decoded
+            AppLog.log("%@", "[ChatService] Loaded \(routingStates.count) routing states")
+        }
+    }
+
+    func saveRoutingStates() {
+        guard let data = try? JSONEncoder().encode(routingStates) else { return }
+        userDefaults.set(data, forKey: routingStatesKey)
+    }
+
+    /// Migrate legacy aliases to deterministic routing states.
+    /// Called once after self-stash recovery completes (requires private key).
+    func migrateToDeterministicAliases(privateKey: Data) {
+        guard !userDefaults.bool(forKey: deterministicMigrationDoneKey) else { return }
+
+        let allContactAddresses = Set(conversationAliases.keys).union(ourAliases.keys).union(
+            contactsManager.activeContacts.map { $0.address }
+        )
+
+        var migrated = 0
+        for address in allContactAddresses {
+            if routingStates[address] != nil { continue }  // already has routing state
+
+            let hasLegacyIncoming = !(conversationAliases[address]?.isEmpty ?? true)
+            let hasLegacyOutgoing = !(ourAliases[address]?.isEmpty ?? true)
+            let hasLegacy = hasLegacyIncoming || hasLegacyOutgoing
+
+            // Derive deterministic pair
+            guard let myAlias = try? DeterministicAlias.deriveMyAlias(privateKey: privateKey, theirAddress: address),
+                  let theirAlias = try? DeterministicAlias.deriveTheirAlias(privateKey: privateKey, theirAddress: address) else {
+                AppLog.log("[ChatService] Failed to derive deterministic aliases for %@", String(address.suffix(10)))
+                continue
+            }
+
+            let state = ConversationRoutingState(
+                contactAddress: address,
+                deterministicMyAlias: myAlias,
+                deterministicTheirAlias: theirAlias,
+                legacyIncomingAliases: conversationAliases[address] ?? [],
+                legacyOutgoingAliases: ourAliases[address] ?? [],
+                mode: hasLegacy ? .hybrid : .deterministicOnly,
+                peerSupportsDeterministic: false,
+                lastLegacyIncomingAtMs: nil,
+                lastDeterministicIncomingAtMs: nil
+            )
+            routingStates[address] = state
+            migrated += 1
+        }
+
+        if migrated > 0 {
+            saveRoutingStates()
+            AppLog.log("[ChatService] Migrated %d contacts to deterministic routing states", migrated)
+        }
+        userDefaults.set(true, forKey: deterministicMigrationDoneKey)
+    }
+
+    /// Ensure a routing state exists for a contact. Creates one on-demand if needed.
+    /// Whether `privateKey` is the CURRENT account's key. A sync task that started before an
+    /// account switch still holds the old account's key; routing derived from it and saved into
+    /// the shared store made the next account watch the OLD account's aliases - so with two
+    /// accounts on the same bot, each fetched the bot's messages meant for the other, which it
+    /// can't decrypt ("[Encrypted message]"). A chatting address that isn't a 32-byte Schnorr
+    /// key can't be checked this way and passes, as before.
+    func isCurrentAccountKey(_ privateKey: Data) -> Bool {
+        guard let wallet = WalletManager.shared.currentWallet,
+              let walletKey = KaspaAddress.publicKey(from: wallet.publicAddress) else { return false }
+        guard walletKey.count == 32 else { return true }
+        guard let derived = try? WalletManager.shared.deriveSchnorrPublicKey(from: privateKey) else { return false }
+        return derived == walletKey
+    }
+
+    /// Contacts whose stored routing was checked against this account's key, per account.
+    static var verifiedRoutingContacts = Set<String>()
+
+    func ensureRoutingState(for address: String, privateKey: Data?) {
+        guard let privKey = privateKey, isCurrentAccountKey(privKey) else { return }
+        guard let myAlias = try? DeterministicAlias.deriveMyAlias(privateKey: privKey, theirAddress: address),
+              let theirAlias = try? DeterministicAlias.deriveTheirAlias(privateKey: privKey, theirAddress: address) else {
+            return
+        }
+        if let existing = routingStates[address] {
+            // Self-heal, once per contact per account: a state an earlier build derived from
+            // another account's key is rebuilt from this one's (its legacy aliases are kept -
+            // any that aren't ours only fetch messages that can't be decrypted, which stay
+            // hidden).
+            let checked = "\(WalletManager.shared.currentWallet?.publicAddress ?? "")|\(address)"
+            guard Self.verifiedRoutingContacts.insert(checked).inserted else { return }
+            guard existing.deterministicMyAlias != myAlias || existing.deterministicTheirAlias != theirAlias else { return }
+            AppLog.log("[ChatService] Routing for %@ was derived from another account's key - rebuilt",
+                       String(address.suffix(10)))
+            routingStates[address] = ConversationRoutingState(
+                contactAddress: address,
+                deterministicMyAlias: myAlias,
+                deterministicTheirAlias: theirAlias,
+                legacyIncomingAliases: existing.legacyIncomingAliases,
+                legacyOutgoingAliases: existing.legacyOutgoingAliases,
+                mode: existing.mode,
+                peerSupportsDeterministic: existing.peerSupportsDeterministic,
+                lastLegacyIncomingAtMs: existing.lastLegacyIncomingAtMs,
+                lastDeterministicIncomingAtMs: nil
+            )
+            saveRoutingStates()
+            return
+        }
+
+        let hasLegacyIncoming = !(conversationAliases[address]?.isEmpty ?? true)
+        let hasLegacyOutgoing = !(ourAliases[address]?.isEmpty ?? true)
+
+        routingStates[address] = ConversationRoutingState(
+            contactAddress: address,
+            deterministicMyAlias: myAlias,
+            deterministicTheirAlias: theirAlias,
+            legacyIncomingAliases: conversationAliases[address] ?? [],
+            legacyOutgoingAliases: ourAliases[address] ?? [],
+            mode: (hasLegacyIncoming || hasLegacyOutgoing) ? .hybrid : .deterministicOnly,
+            peerSupportsDeterministic: false,
+            lastLegacyIncomingAtMs: nil,
+            lastDeterministicIncomingAtMs: nil
+        )
+        saveRoutingStates()
+    }
+
+    /// Get all incoming aliases (deterministic + legacy) for a contact
+    func incomingAliases(for address: String) -> Set<String> {
+        guard let state = routingStates[address] else {
+            return conversationAliases[address] ?? []
+        }
+        var aliases: Set<String> = [state.deterministicMyAlias]
+        if state.mode != .deterministicOnly {
+            aliases.formUnion(state.legacyIncomingAliases)
+        }
+        return aliases
+    }
+
+    /// Quiet old-style aliases are queried at most this often (once per launch, then daily).
+    static let legacyAliasPollIntervalMs: UInt64 = 24 * 60 * 60 * 1000
+
+    /// Whether a sync should query `alias` this time.
+    ///
+    /// Every INCOMING alias is queried every time: anyone in the chat list must always be found,
+    /// whichever alias their app sends on (an old client, or a reinstall that started over on
+    /// an old-style alias). The slow lane - once per launch, then at most daily - is for the
+    /// OUTGOING old-style aliases only (copies of what this device sent long ago), except the one
+    /// this device currently sends on. Gating incoming ones (00d4919) kept a contact's messages
+    /// off the list until the chat was opened or a day passed.
+    func shouldPollAlias(_ alias: String, direction: String, contactAddress: String, syncObjectKey: String, nowMs: UInt64) -> Bool {
+        guard direction == "out", let state = routingStates[contactAddress] else { return true }
+        if alias == state.deterministicMyAlias || alias == state.deterministicTheirAlias { return true }
+        if outgoingAlias(for: contactAddress) == alias { return true }
+        guard let lastPolled = legacyAliasPolledAtMs[syncObjectKey] else { return true }
+        return nowMs < lastPolled || nowMs - lastPolled >= Self.legacyAliasPollIntervalMs
+    }
+
+    /// Records a successful query of `syncObjectKey` for the slow lane above.
+    func noteAliasPolled(syncObjectKey: String, nowMs: UInt64) {
+        legacyAliasPolledAtMs[syncObjectKey] = nowMs
+    }
+
+    /// Get all outgoing fetch aliases (deterministic + legacy) for syncing our sent messages
+    func outgoingFetchAliases(for address: String) -> Set<String> {
+        guard let state = routingStates[address] else {
+            return ourAliases[address] ?? []
+        }
+        var aliases: Set<String> = [state.deterministicTheirAlias]
+        if state.mode != .deterministicOnly {
+            aliases.formUnion(state.legacyOutgoingAliases)
+        }
+        return aliases
+    }
+
+    /// Get the outgoing alias to use when sending a new message
+    func outgoingAlias(for address: String) -> String {
+        guard let state = routingStates[address] else {
+            // Fallback to legacy if no routing state
+            return primaryOurAlias(for: address) ?? generateAlias()
+        }
+        switch state.mode {
+        case .deterministicOnly:
+            return state.deterministicTheirAlias
+        case .hybrid:
+            return state.peerSupportsDeterministic
+                ? state.deterministicTheirAlias
+                : state.legacyOutgoingAliases.sorted().first ?? state.deterministicTheirAlias
+        case .legacyOnly:
+            return state.legacyOutgoingAliases.sorted().first ?? state.deterministicTheirAlias
+        }
+    }
+
+    /// Check if a routing state exists for a contact
+    func hasRoutingState(for address: String) -> Bool {
+        routingStates[address] != nil
+    }
+
+    func decodeAliasSetMap(from data: Data) -> [String: Set<String>]? {
+        if let decoded = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            return decoded.mapValues { Set($0) }
+        }
+        return nil
+    }
+
+    func encodeAliasSetMap(_ map: [String: Set<String>]) -> [String: [String]] {
+        map.mapValues { Array($0) }
+    }
+
+    func rebuildPrimaryAliasesIfNeeded() {
+        for (address, aliases) in conversationAliases {
+            if let primary = conversationPrimaryAliases[address] {
+                if !aliases.contains(primary) {
+                    var updated = aliases
+                    updated.insert(primary)
+                    conversationAliases[address] = updated
+                }
+                continue
+            }
+            if let selected = aliases.sorted().first {
+                conversationPrimaryAliases[address] = selected
+            }
+        }
+        for (address, aliases) in ourAliases {
+            if let primary = ourPrimaryAliases[address] {
+                if !aliases.contains(primary) {
+                    var updated = aliases
+                    updated.insert(primary)
+                    ourAliases[address] = updated
+                }
+                continue
+            }
+            if let selected = aliases.sorted().first {
+                ourPrimaryAliases[address] = selected
+            }
+        }
+    }
+
+    func loadPendingSelfStash() {
+        guard let data = userDefaults.data(forKey: pendingSelfStashKey),
+              let jobs = try? JSONDecoder().decode([PendingSelfStash].self, from: data) else {
+            pendingSelfStash = []
+            return
+        }
+        pendingSelfStash = jobs
+    }
+
+    func savePendingSelfStash() {
+        guard let data = try? JSONEncoder().encode(pendingSelfStash) else { return }
+        userDefaults.set(data, forKey: pendingSelfStashKey)
+    }
+
+    func loadDeclinedContacts() {
+        guard let data = userDefaults.data(forKey: declinedContactsKey),
+              let list = try? JSONDecoder().decode([String].self, from: data) else {
+            declinedContacts = []
+            return
+        }
+        declinedContacts = Set(list)
+    }
+
+    func saveDeclinedContacts() {
+        let list = Array(declinedContacts)
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        userDefaults.set(data, forKey: declinedContactsKey)
+    }
+
+    func declineContact(_ address: String) {
+        declinedContacts.insert(address)
+        saveDeclinedContacts()
+    }
+
+    func clearDeclined(_ address: String) {
+        if declinedContacts.remove(address) != nil {
+            saveDeclinedContacts()
+        }
+    }
+
+    // MARK: - Decryption (nonisolated to run off main thread)
+
+    /// Decrypt handshake payload on background thread
+}

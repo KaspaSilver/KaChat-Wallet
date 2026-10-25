@@ -1,0 +1,759 @@
+import Foundation
+import Combine
+import UIKit
+import UserNotifications
+import CryptoKit
+
+// MARK: - Message decryption, hex utilities, support structures
+
+extension ChatService {
+    func decryptHandshakePayload(_ payload: String?, privateKey: Data) async -> DecryptedHandshake? {
+        guard let payload = payload else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptHandshakePayloadSync(payload, privateKey: privateKey)
+        }.value
+    }
+
+    /// Synchronous handshake decryption (runs on background thread)
+    /// Handles two payload formats:
+    /// - Indexer format: just the encrypted hex (no prefix)
+    /// - REST API format: full transaction payload hex = hex("kchat:1:handshake:") + encrypted_hex (legacy ciph_msg:1: read too)
+    nonisolated static func decryptHandshakePayloadSync(_ payload: String, privateKey: Data) -> DecryptedHandshake? {
+        var encryptedHex = payload
+
+        // Strip protocol prefix if present (REST API returns full transaction payload).
+        // Dual-read: new `kchat:1:handshake:` and legacy `ciph_msg:1:handshake:` hex roots.
+        let handshakePrefixHexes = [
+            "6b636861743a313a68616e647368616b653a",       // kchat:1:handshake:
+            "636970685f6d73673a313a68616e647368616b653a", // ciph_msg:1:handshake: (legacy)
+        ]
+        let lowered = payload.lowercased()
+
+        // Also handle optional OP_RETURN prefix: "6a" + 1 byte length
+        for handshakePrefixHex in handshakePrefixHexes {
+            if lowered.hasPrefix("6a") {
+                let stripped = String(lowered.dropFirst(4))
+                if stripped.hasPrefix(handshakePrefixHex) {
+                    encryptedHex = String(payload.dropFirst(4 + handshakePrefixHex.count))
+                    break
+                }
+            } else if lowered.hasPrefix(handshakePrefixHex) {
+                encryptedHex = String(payload.dropFirst(handshakePrefixHex.count))
+                break
+            }
+        }
+
+        // Decrypt the encrypted portion
+        if let decrypted = try? KasiaCipher.decryptHex(encryptedHex, privateKey: privateKey) {
+            if let data = decrypted.data(using: .utf8),
+               let json = try? JSONDecoder().decode(DecryptedHandshake.self, from: data) {
+                return json  // alias may be nil for deterministic handshakes
+            }
+            // Legacy: raw decrypted text is not valid JSON — treat as alias-less handshake
+            return DecryptedHandshake(alias: nil, type: "handshake")
+        }
+
+        // Fallback: try decrypting the raw payload (indexer format without prefix)
+        if encryptedHex != payload {
+            if let decrypted = try? KasiaCipher.decryptHex(payload, privateKey: privateKey) {
+                if let data = decrypted.data(using: .utf8),
+                   let json = try? JSONDecoder().decode(DecryptedHandshake.self, from: data) {
+                    return json
+                }
+                return DecryptedHandshake(alias: nil, type: "handshake")
+            }
+        }
+
+        return nil
+    }
+
+    /// Decrypt contextual message on background thread
+    func decryptContextualMessage(_ payload: String?, privateKey: Data) async -> String? {
+        guard let payload = payload else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptContextualMessageSync(payload, privateKey: privateKey)
+        }.value
+    }
+
+    /// Synchronous contextual message decryption (runs on background thread)
+    /// Expects format: hex(base64(encrypted)) - as returned by indexer
+    nonisolated static func decryptContextualMessageSync(_ payload: String, privateKey: Data) -> String? {
+        // Contextual message payload is hex(base64(encrypted))
+        // First decode hex to get the base64 string
+        guard let base64Data = hexStringToData(payload),
+              let base64String = String(data: base64Data, encoding: .utf8) else {
+            return nil
+        }
+
+        // Then decode base64 to get the encrypted bytes
+        guard let encryptedData = Data(base64Encoded: base64String) else {
+            return nil
+        }
+
+        // Now decrypt
+        do {
+            guard let encryptedMessage = KasiaCipher.EncryptedMessage(fromBytes: encryptedData) else {
+                return nil
+            }
+            let decrypted = try KasiaCipher.decrypt(encryptedMessage, privateKey: privateKey)
+            return decrypted
+        } catch {
+            return nil
+        }
+    }
+
+    /// Decrypt contextual message from raw TX payload on background thread
+    /// Raw TX payload format: "kchat:1:comm:ALIAS:BASE64_ENCRYPTED" (as returned by REST API;
+    /// the legacy "ciph_msg:1:comm:" root is read too, never written)
+    func decryptContextualMessageFromRawPayload(_ payload: String?, privateKey: Data) async -> String? {
+        guard let payload = payload else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptContextualMessageFromRawPayloadSync(payload, privateKey: privateKey)
+        }.value
+    }
+
+    /// Synchronous decryption from raw TX payload
+    nonisolated static func decryptContextualMessageFromRawPayloadSync(_ payload: String, privateKey: Data) -> String? {
+        // Raw payload from REST API is hex-encoded
+        guard let payloadData = hexStringToData(payload),
+              let rawPayloadString = String(data: payloadData, encoding: .utf8) else {
+            AppLog.log("[ChatService] Raw payload: failed to decode hex to string")
+            return nil
+        }
+        // A first-contact `dm` message is a contextual message plus an inbox tag.
+        let payloadString = ContextualPayloadFormat.normalized(rawPayloadString)
+
+        // Check if it's a contextual message: "kchat:1:comm:ALIAS:BASE64_ENCRYPTED" (dual-read
+        // of the legacy "ciph_msg:1:comm:" root too).
+        guard payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:") else {
+            // Not a contextual message - could be handshake or other type
+            if payloadString.hasPrefix("kchat:") || payloadString.hasPrefix("ciph_msg:") {
+                AppLog.log("[ChatService] Raw payload: different message type: %@", String(payloadString.prefix(30)))
+            }
+            return nil
+        }
+
+        // Split by ":" and get the last part (encrypted base64)
+        let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
+        // parts: ["ciph_msg", "1", "comm", "ALIAS", "BASE64_ENCRYPTED"]
+        guard parts.count >= 5 else {
+            AppLog.log("[ChatService] Raw payload: unexpected format, parts=%d", parts.count)
+            return nil
+        }
+
+        let base64String = String(parts[4])
+        guard !base64String.isEmpty else {
+            AppLog.log("[ChatService] Raw payload: empty base64 content")
+            return nil
+        }
+
+        // Decode base64 to get encrypted bytes
+        guard let encryptedData = Data(base64Encoded: base64String) else {
+            AppLog.log("[ChatService] Raw payload: failed to decode base64")
+            return nil
+        }
+
+        // Decrypt
+        do {
+            guard let encryptedMessage = KasiaCipher.EncryptedMessage(fromBytes: encryptedData) else {
+                AppLog.log("[ChatService] Raw payload: failed to parse encrypted message structure")
+                return nil
+            }
+            let decrypted = try KasiaCipher.decrypt(encryptedMessage, privateKey: privateKey)
+            return decrypted
+        } catch {
+            AppLog.log("[ChatService] Raw payload: decryption failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    nonisolated static func extractContextualAlias(fromRawPayloadString rawPayloadString: String) -> String? {
+        let payloadString = ContextualPayloadFormat.normalized(rawPayloadString)
+        guard payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:") else {
+            return nil
+        }
+
+        let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
+        guard parts.count >= 5 else {
+            AppLog.log("[ChatService] Raw payload: unexpected format, parts=%d", parts.count)
+            return nil
+        }
+
+        let alias = String(parts[3])
+        if alias.isEmpty {
+            AppLog.log("[ChatService] Raw payload: empty alias")
+            return nil
+        }
+
+        return alias
+    }
+
+    func decryptPaymentPayloadFromSealedHex(_ payload: String?, privateKey: Data) async -> PaymentPayload? {
+        guard let payload = payload else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptPaymentPayloadFromSealedHexSync(payload, privateKey: privateKey)
+        }.value
+    }
+
+    nonisolated static func decryptPaymentPayloadFromSealedHexSync(_ payload: String, privateKey: Data) -> PaymentPayload? {
+        do {
+            let decrypted = try KasiaCipher.decryptHex(payload, privateKey: privateKey)
+            if let data = decrypted.data(using: .utf8),
+               let json = try? JSONDecoder().decode(PaymentPayload.self, from: data) {
+                return json
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    func decryptPaymentPayloadFromRawPayload(_ payload: String?, privateKey: Data) async -> PaymentPayload? {
+        guard let payload = payload else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptPaymentPayloadFromRawPayloadSync(payload, privateKey: privateKey)
+        }.value
+    }
+
+    nonisolated static func decryptPaymentPayloadFromRawPayloadSync(_ payload: String, privateKey: Data) -> PaymentPayload? {
+        guard let payloadData = hexStringToData(payload) else {
+            AppLog.log("[ChatService] Raw payload: failed to decode hex for payment")
+            return nil
+        }
+
+        // Dual-read: new `kchat:1:pay:` root and the two legacy `ciph_msg:` roots - and a KaPosts
+        // tip (`kchat:1:tip:`), whose sealed record is the same, as hex in its last field.
+        let prefixNew = Data("kchat:1:pay:".utf8)
+        let prefixV1 = Data("ciph_msg:1:pay:".utf8)
+        let prefixLegacy = Data("ciph_msg:pay:".utf8)
+        let encryptedBytes: Data
+
+        if let sealed = tipSealedBytes(payloadData) {
+            encryptedBytes = sealed
+        } else if payloadData.starts(with: prefixNew) {
+            encryptedBytes = Data(payloadData.dropFirst(prefixNew.count))
+        } else if payloadData.starts(with: prefixV1) {
+            encryptedBytes = Data(payloadData.dropFirst(prefixV1.count))
+        } else if payloadData.starts(with: prefixLegacy) {
+            encryptedBytes = Data(payloadData.dropFirst(prefixLegacy.count))
+        } else {
+            return nil
+        }
+
+        guard let encryptedMessage = KasiaCipher.EncryptedMessage(fromBytes: encryptedBytes) else {
+            return nil
+        }
+
+        do {
+            let decrypted = try KasiaCipher.decrypt(encryptedMessage, privateKey: privateKey)
+            if let data = decrypted.data(using: .utf8),
+               let json = try? JSONDecoder().decode(PaymentPayload.self, from: data) {
+                return json
+            }
+        } catch {
+            return nil
+        }
+
+        return nil
+    }
+
+    nonisolated static func isPaymentRawPayload(_ payload: String) -> Bool {
+        guard let payloadData = hexStringToData(payload) else { return false }
+        let prefixNew = Data("kchat:1:pay:".utf8)
+        let prefixV1 = Data("ciph_msg:1:pay:".utf8)
+        let prefixLegacy = Data("ciph_msg:pay:".utf8)
+        return payloadData.starts(with: prefixNew) || payloadData.starts(with: prefixV1) || payloadData.starts(with: prefixLegacy)
+            || payloadData.starts(with: Data(tipPrefix.utf8))
+    }
+
+    /// A KaPosts tip: `kchat:1:tip:<pubkey>:<signature>:<post_id>:<author_pubkey>:<sealed_hex>`
+    /// (KAPOSTS_INDEXER.md 5.11) - a chat payment to the post's author that names the post.
+    nonisolated static let tipPrefix = "kchat:1:tip:"
+
+    /// The tip's parts, or nil when `payloadData` isn't a well-formed tip.
+    nonisolated static func tipParts(_ payloadData: Data) -> (pubkey: String, postId: String, authorPubkey: String, sealedHex: String)? {
+        guard payloadData.starts(with: Data(tipPrefix.utf8)),
+              let text = String(data: payloadData, encoding: .utf8) else { return nil }
+        let fields = text.dropFirst(tipPrefix.count).split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 5, !fields[4].isEmpty else { return nil }
+        return (fields[0], fields[2], fields[3], fields[4])
+    }
+
+    /// The sealed payment record inside a tip, as bytes.
+    nonisolated static func tipSealedBytes(_ payloadData: Data) -> Data? {
+        guard let parts = tipParts(payloadData) else { return nil }
+        return hexStringToData(parts.sealedHex)
+    }
+
+    /// Decrypt self-stash on background thread
+    func decryptSelfStash(_ stashedData: String, privateKey: Data) async -> SavedHandshakeData? {
+        return await Task.detached(priority: .userInitiated) {
+            Self.decryptSelfStashSync(stashedData, privateKey: privateKey)
+        }.value
+    }
+
+    /// Synchronous self-stash decryption (runs on background thread)
+    nonisolated static func decryptSelfStashSync(_ stashedData: String, privateKey: Data) -> SavedHandshakeData? {
+        // Self-stash data is hex-encoded encrypted JSON
+        do {
+            let decrypted = try KasiaCipher.decryptHex(stashedData, privateKey: privateKey)
+
+            // Parse JSON to extract saved handshake data
+            if let data = decrypted.data(using: .utf8) {
+                // Try to parse as SavedHandshakeData directly
+                if let savedData = try? JSONDecoder().decode(SavedHandshakeData.self, from: data) {
+                    return savedData
+                }
+
+                // Try to parse as a flexible JSON structure with Kasia's field names
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    // Extract alias (our alias)
+                    let ourAlias = json["alias"] as? String ?? ""
+
+                    // Extract contact address (could be partnerAddress or recipientAddress)
+                    let contactAddress = json["partnerAddress"] as? String
+                        ?? json["recipientAddress"] as? String
+                        ?? json["partner_address"] as? String
+                        ?? json["recipient_address"] as? String
+                        ?? ""
+
+                    // Extract their alias
+                    let theirAlias = json["theirAlias"] as? String
+                        ?? json["their_alias"] as? String
+
+                    if !ourAlias.isEmpty && !contactAddress.isEmpty {
+                        return SavedHandshakeData(
+                            type: json["type"] as? String,
+                            alias: ourAlias,
+                            timestamp: json["timestamp"] as? UInt64,
+                            version: json["version"] as? Int,
+                            theirAlias: theirAlias,
+                            partnerAddress: contactAddress,
+                            recipientAddress: nil,
+                            isResponse: json["isResponse"] as? Bool
+                        )
+                    }
+                }
+            }
+
+            return nil
+        } catch {
+            return nil
+        }
+    }
+}
+
+// MARK: - Supporting Types
+
+    struct CachedConversation: Codable {
+        let id: UUID
+        let contactAddress: String
+        let messages: [ChatMessage]
+        let unreadCount: Int
+    }
+
+    struct ChatHistoryArchive: Codable {
+        let schemaVersion: Int
+        let exportedAt: Date
+        let walletAddress: String?
+        let conversations: [ChatHistoryArchiveConversation]
+        // Cross-platform group key material (optional; older archives omit it). Carries the
+        // full bag - including the admin's groupSeed - so another device of the same account
+        // recovers admin groups that have no on-chain invite addressed to it.
+        let groups: [ChatHistoryArchiveGroup]?
+        // Deletion tombstones (optional; older archives omit it): addresses whose chats the
+        // user deleted. A restore - local file, Nextcloud, or any other transport - must
+        // never resurrect them, even on a fresh install with no local tombstones.
+        let deletedContactAddresses: [String]?
+        // Address Book (optional; older archives omit it): this wallet's saved addresses, and
+        // the deleted ones so a merge or restore never brings them back. NEXTCLOUD_SYNC.md.
+        var addressBook: [AddressBookEntry]? = nil
+        var addressBookDeleted: [AddressBookTombstone]? = nil
+        // Portfolios (optional; older archives omit them): this wallet's portfolio list, ledger
+        // rows, recorded fees and deletions - per item the newest edit or deletion wins
+        // (PortfolioSync). NEXTCLOUD_SYNC.md section 5.
+        var portfolios: [Portfolio]? = nil
+        var portfolioTransactions: [PortfolioTransaction]? = nil
+        var portfolioFees: [PortfolioFeeRecord]? = nil
+        var portfolioDeleted: [PortfolioTombstone]? = nil
+    }
+
+    struct ChatHistoryArchiveConversation: Codable {
+        let conversationId: UUID?
+        let contactAddress: String
+        let contactAlias: String?
+        // Cross-platform base64 JPEG contact photo (optional; older archives omit it).
+        let contactPhoto: String?
+        let unreadCount: Int
+        let messages: [ChatMessage]
+    }
+
+    // Field names match the desktop/Android archive schema exactly. deviceId/msgCounter are
+    // per-device and deliberately NOT carried (the importer mints its own).
+    struct ChatHistoryArchiveGroup: Codable {
+        let groupId: String
+        let name: String
+        let isAdmin: Bool
+        let adminAddress: String?
+        let adminSigningPub: String?
+        let groupSeed: String?
+        let groupRootEpoch: String?
+        let blindingKey: String?
+        let currentEpoch: UInt64
+        // Roots for epochs the group has already left, keyed by decimal epoch. Optional so older
+        // archives (and other platforms that predate the field) still decode. Without these a
+        // NON-ADMIN member restoring onto a device that holds no bag can decrypt only the
+        // current epoch, and everything older reads as an empty thread.
+        let previousRoots: [String: String]?
+        let members: [ChatHistoryArchiveGroupMember]
+        // Decrypted plaintext message history (optional; older archives omit it). Lets history
+        // survive an indexer prune - the importer stores these under a negative-epoch sentinel.
+        let messages: [ChatHistoryArchiveGroupMessage]?
+        // Admin-set group photo (hex of a compressed JPEG); nil = none. Cross-platform field.
+        let photo: String?
+    }
+
+    struct ChatHistoryArchiveGroupMember: Codable {
+        let address: String
+        let xOnlyPubKeyHex: String?
+        let isAdmin: Bool
+    }
+
+    // Cross-platform decrypted group message. Field names match desktop/Android exactly.
+    struct ChatHistoryArchiveGroupMessage: Codable {
+        let msgIdHex: String?
+        let txId: String?
+        let senderAddress: String?
+        let senderIdHex: String?
+        let content: String
+        let blockTime: UInt64
+        let isOutgoing: Bool
+    }
+
+/// Result from resolving transaction info from REST API
+struct TransactionResolveInfo {
+    let sender: String
+    let blockTimeMs: UInt64
+    let payload: String?
+}
+
+struct KaspaTransactionResponse: Codable {
+    let outputs: [KaspaTransactionOutput]
+}
+
+struct KaspaTransactionOutput: Codable {
+    let scriptPublicKeyAddress: String?
+
+    enum CodingKeys: String, CodingKey {
+        case scriptPublicKeyAddress = "script_public_key_address"
+    }
+}
+
+struct DecryptedHandshake: Codable {
+    let alias: String?
+    let type: String?
+    let timestamp: UInt64?
+    let version: Int?
+    let conversationId: String?
+    let recipientAddress: String?
+    let sendToRecipient: Bool?
+    let isResponse: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case alias
+        case type
+        case timestamp
+        case version
+        case conversationId
+        case recipientAddress
+        case sendToRecipient
+        case isResponse
+    }
+
+    init(alias: String?, type: String? = nil, timestamp: UInt64? = nil, version: Int? = nil, conversationId: String? = nil, recipientAddress: String? = nil, sendToRecipient: Bool? = nil, isResponse: Bool? = nil) {
+        self.alias = alias
+        self.type = type
+        self.timestamp = timestamp
+        self.version = version
+        self.conversationId = conversationId
+        self.recipientAddress = recipientAddress
+        self.sendToRecipient = sendToRecipient
+        self.isResponse = isResponse
+    }
+
+    /// Dynamic coding key for dual camelCase/snake_case interop
+    struct DynKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+        init(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+        init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let dyn = try decoder.container(keyedBy: DynKey.self)
+        self.alias = try container.decodeIfPresent(String.self, forKey: .alias)
+        self.type = try container.decodeIfPresent(String.self, forKey: .type)
+        self.timestamp = try container.decodeIfPresent(UInt64.self, forKey: .timestamp)
+        self.version = try container.decodeIfPresent(Int.self, forKey: .version)
+        // Dual-key: try camelCase then snake_case
+        self.conversationId = try container.decodeIfPresent(String.self, forKey: .conversationId)
+            ?? dyn.decodeIfPresent(String.self, forKey: DynKey(stringValue: "conversation_id"))
+        self.recipientAddress = try container.decodeIfPresent(String.self, forKey: .recipientAddress)
+            ?? dyn.decodeIfPresent(String.self, forKey: DynKey(stringValue: "recipient_address"))
+        self.sendToRecipient = try container.decodeIfPresent(Bool.self, forKey: .sendToRecipient)
+            ?? dyn.decodeIfPresent(Bool.self, forKey: DynKey(stringValue: "send_to_recipient"))
+        self.isResponse = try container.decodeIfPresent(Bool.self, forKey: .isResponse)
+            ?? dyn.decodeIfPresent(Bool.self, forKey: DynKey(stringValue: "is_response"))
+    }
+}
+
+struct PendingSelfStash: Codable, Identifiable, Equatable {
+    let id: UUID
+    let partnerAddress: String
+    let ourAlias: String
+    let theirAlias: String?
+    let isResponse: Bool
+    /// A contact-only note for a chat with no handshake (`buildContactSelfStashTx`) rather than
+    /// a handshake's. Optional so queues saved before it existed still decode.
+    var contactOnly: Bool?
+
+    init(partnerAddress: String, ourAlias: String, theirAlias: String?, isResponse: Bool, contactOnly: Bool? = nil) {
+        self.id = UUID()
+        self.partnerAddress = partnerAddress
+        self.ourAlias = ourAlias
+        self.theirAlias = theirAlias
+        self.isResponse = isResponse
+        self.contactOnly = contactOnly
+    }
+}
+
+// MARK: - Kaspa API Transaction Models (for fetching payments directly)
+
+struct KaspaFullTransactionResponse: Codable {
+    let transactionId: String
+    let inputs: [KaspaFullTxInput]?
+    let outputs: [KaspaFullTxOutput]
+    let subnetworkId: String?
+    let payload: String?
+    let blockTime: UInt64?
+    let blockHash: [String]?
+    let isAccepted: Bool?
+    let acceptingBlockHash: String?
+    let acceptingBlockBlueScore: UInt64?
+    let acceptingBlockTime: UInt64?
+    let mass: String?  // API returns as String
+    let hash: String?
+    let version: UInt16?
+    let lockTime: FlexibleUInt64?
+    let gas: FlexibleUInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case transactionId = "transaction_id"
+        case inputs
+        case outputs
+        case subnetworkId = "subnetwork_id"
+        case payload
+        case blockTime = "block_time"
+        case blockHash = "block_hash"
+        case isAccepted = "is_accepted"
+        case acceptingBlockHash = "accepting_block_hash"
+        case acceptingBlockBlueScore = "accepting_block_blue_score"
+        case acceptingBlockTime = "accepting_block_time"
+        case mass
+        case hash
+        case version
+        case lockTime = "lock_time"
+        case gas
+    }
+}
+
+extension KaspaFullTransactionResponse {
+    nonisolated static let coinbaseSubnetworkId = "0100000000000000000000000000000000000000"
+
+    /// A block reward: the coinbase subnetwork, and no inputs.
+    var isCoinbase: Bool {
+        if let subnetwork = subnetworkId?.lowercased(), !subnetwork.isEmpty {
+            return subnetwork == Self.coinbaseSubnetworkId
+        }
+        return (inputs ?? []).isEmpty
+    }
+
+    /// Whether an address's history lists it. A block reward counts only once the chain accepted
+    /// it: every block carries a coinbase paying its miner, but only those the selected chain
+    /// accepts are ever applied - the rest never paid anything (a live mining address, checked
+    /// 2026-10-20: 149 of its last 200 coinbases were not accepted). Everything else is listed
+    /// as before: a payment just sent is briefly unaccepted too, and must still show.
+    var belongsInHistory: Bool {
+        !isCoinbase || isAccepted == true
+    }
+}
+
+struct KaspaFullTxInput: Codable {
+    // Flat structure - API returns fields directly, not nested
+    let transactionId: String?
+    let index: Int?
+    let previousOutpointHash: String?
+    let previousOutpointIndex: String?  // String in API
+    let previousOutpointAddress: String? // Resolved address when using resolve_previous_outpoints
+    let previousOutpointAmount: UInt64?
+    let signatureScript: String?
+    let sequence: FlexibleUInt64?
+    let sigOpCount: FlexibleUInt8?
+
+    enum CodingKeys: String, CodingKey {
+        case transactionId = "transaction_id"
+        case index
+        case previousOutpointHash = "previous_outpoint_hash"
+        case previousOutpointIndex = "previous_outpoint_index"
+        case previousOutpointAddress = "previous_outpoint_address"
+        case previousOutpointAmount = "previous_outpoint_amount"
+        case signatureScript = "signature_script"
+        case sequence
+        case sigOpCount = "sig_op_count"
+    }
+}
+
+/// Flexible decoder that handles both numeric and string representations of UInt64
+struct FlexibleUInt64: Codable {
+    let value: UInt64
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intVal = try? container.decode(UInt64.self) {
+            value = intVal
+        } else if let strVal = try? container.decode(String.self), let parsed = UInt64(strVal) {
+            value = parsed
+        } else {
+            value = 0
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+}
+
+/// Flexible decoder that handles both numeric and string representations of UInt8
+struct FlexibleUInt8: Codable {
+    let value: UInt8
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let intVal = try? container.decode(UInt8.self) {
+            value = intVal
+        } else if let strVal = try? container.decode(String.self), let parsed = UInt8(strVal) {
+            value = parsed
+        } else {
+            value = 1
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+}
+
+struct KaspaFullTxOutput: Codable {
+    let transactionId: String?
+    let index: Int?
+    let amount: UInt64
+    let scriptPublicKey: String?  // Simple hex string, not an object
+    let scriptPublicKeyAddress: String?
+    let scriptPublicKeyType: String?
+    /// Version 1 transactions: the output's covenant binding (both nil without one). Part of
+    /// the v1 signature hash.
+    var covenantAuthorizingInput: UInt16? = nil
+    var covenantId: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case transactionId = "transaction_id"
+        case index
+        case amount
+        case scriptPublicKey = "script_public_key"
+        case scriptPublicKeyAddress = "script_public_key_address"
+        case scriptPublicKeyType = "script_public_key_type"
+        case covenantAuthorizingInput = "covenant_authorizing_input"
+        case covenantId = "covenant_id"
+    }
+}
+
+extension KaspaFullTransactionResponse {
+    /// Direction + KAS amount relevant to `address`, for plain per-address transaction history
+    /// lists (not chat/contact resolution — no sender/receiver naming). Uses the same
+    /// input/output heuristics as ChatService's payment detection (see CLAUDE.md "Payment
+    /// detection logic"): outgoing if `address` appears among the inputs (it signed the tx),
+    /// incoming if it only appears among the outputs. Amount is the total sent to `address` for
+    /// incoming, or the smallest non-`address` output for outgoing (the non-change output is
+    /// usually the actual payment; change back to the sender is usually larger). Returns nil for
+    /// a transaction with no clear relevance to `address` at all (shouldn't normally occur for a
+    /// transaction that was fetched for this exact address in the first place).
+    /// The transaction's fee: inputs minus outputs. Known only when the API resolved every
+    /// input's amount (`resolve_previous_outpoints=light`, which the history fetches ask for);
+    /// nil for a coinbase or when an input amount is missing.
+    var feeSompi: UInt64? {
+        guard let inputs, !inputs.isEmpty else { return nil }
+        var totalIn: UInt64 = 0
+        for input in inputs {
+            guard let amount = input.previousOutpointAmount else { return nil }
+            totalIn += amount
+        }
+        let totalOut = outputs.reduce(UInt64(0)) { $0 + $1.amount }
+        return totalIn >= totalOut ? totalIn - totalOut : nil
+    }
+
+    /// "Fee 0.0001 KAS" for a history row, or nil when the fee cannot be known.
+    func feeText() -> String? {
+        guard let fee = feeSompi else { return nil }
+        let kas = Double(fee) / 100_000_000.0
+        let text = kas >= 0.001 ? String(format: "%.4f", kas) : String(format: "%.8f", kas)
+        return "Fee \(text) \(KaspaUnit.symbol)"
+    }
+
+    func direction(for address: String) -> (isOutgoing: Bool, amountSompi: UInt64)? {
+        let weAreSender = (inputs ?? []).contains { $0.previousOutpointAddress == address }
+
+        var totalToUs: UInt64 = 0
+        var totalToOthers: UInt64 = 0
+        var recipientAmount: UInt64 = 0
+        var haveRecipient = false
+
+        for output in outputs {
+            guard let addr = output.scriptPublicKeyAddress, !addr.isEmpty else { continue }
+            if addr == address {
+                totalToUs += output.amount
+            } else {
+                totalToOthers += output.amount
+                if !haveRecipient || output.amount < recipientAmount {
+                    recipientAmount = output.amount
+                    haveRecipient = true
+                }
+            }
+        }
+
+        if weAreSender && totalToOthers > 0 {
+            return (isOutgoing: true, amountSompi: haveRecipient ? recipientAmount : totalToOthers)
+        } else if !weAreSender && totalToUs > 0 {
+            return (isOutgoing: false, amountSompi: totalToUs)
+        }
+        return nil
+    }
+}
+
+actor InFlightResolveTracker {
+    var ids = Set<String>()
+
+    func contains(_ id: String) -> Bool {
+        ids.contains(id)
+    }
+
+    func insert(_ id: String) {
+        ids.insert(id)
+    }
+
+    func remove(_ id: String) {
+        ids.remove(id)
+    }
+}

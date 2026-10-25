@@ -1,0 +1,408 @@
+import Foundation
+
+extension KachatNames {
+
+    /// A compiled contract: `redeem = prefix || state || suffix`.
+    struct Template: Equatable {
+        let contract: String
+        let prefix: Data
+        let suffix: Data
+        let stateLength: Int
+        let templateHash: Data
+        /// entry name -> 4-byte dispatch tag
+        let dispatchTags: [String: Data]
+
+        func redeem(_ state: Data) -> Data {
+            var d = prefix
+            d.append(state)
+            d.append(suffix)
+            return d
+        }
+
+        /// The P2SH script of `prefix || state || suffix`.
+        func script(_ state: Data) -> Data { Codec.p2shScript(redeem(state)) }
+
+        func tag(_ entry: String) throws -> Data {
+            guard let t = dispatchTags[entry] else { throw Failure("\(contract) has no entry \(entry)") }
+            return t
+        }
+
+        /// The state of a redeem script of this template (what a spend reveals).
+        func state(ofRedeem redeem: Data) throws -> Data {
+            guard redeem.count == prefix.count + stateLength + suffix.count,
+                  redeem.prefix(prefix.count) == prefix,
+                  redeem.suffix(suffix.count) == suffix else {
+                throw Failure("not a \(contract) redeem script")
+            }
+            let start = redeem.startIndex + prefix.count
+            return Data(redeem[start..<(start + stateLength)])
+        }
+    }
+
+    /// The registry parameters (kachat-domains params/<network>.json, registry v4). The prices are
+    /// fixed: baked into the gap and name templates (whose hashes are pinned), so these tables are
+    /// what the contracts charge.
+    struct Params: Equatable {
+        let bond: UInt64
+        let gapValue: UInt64
+        let tCommit: UInt64
+        /// most periods a name may be paid ahead
+        let maxYears: Int64
+        /// one paid period, ms: a year on mainnet, 24 hours on the testnet-10 clock
+        let periodMs: Int64
+        let graceMs: Int64
+        /// `renew` is valid from `expiresAt - renewWindowMs` on
+        let renewWindowMs: Int64
+        /// sompi for a name's first period, by length 1, 2, 3, 4, 5+ bytes
+        let registerPrices: [UInt64]
+        /// sompi for every further period (extend, renew, registering past one period)
+        let renewPrices: [UInt64]
+        let offerMaxFee: UInt64
+        /// Registry v5: the predecessor snapshot this registry imports; nil on v4 (and on a v5
+        /// registry with no predecessor, whose root and deadline are 0).
+        var migration: Migration? = nil
+
+        /// `register` is refused while `now < migration.deadlineMs` (registry v5): the sponsor
+        /// imports every snapshot name first.
+        func registerOpen(atMs now: Int64) -> Bool { now >= (migration?.deadlineMs ?? 0) }
+
+        // MARK: Prices (registry v4: KachatGap.priceFor, KachatName.renewPrice)
+
+        func registerPrice(forLength n: Int) -> UInt64 { registerPrices[Codec.tier(n)] }
+        func renewPrice(forLength n: Int) -> UInt64 { renewPrices[Codec.tier(n)] }
+
+        /// What `register` charges for `years` periods: the first at the registration price,
+        /// every further one at the renewal price.
+        func registerCost(forLength n: Int, years: Int64) -> UInt64 {
+            registerPrice(forLength: n) + renewPrice(forLength: n) * UInt64(max(years - 1, 0))
+        }
+
+        // MARK: The paid period (KACHAT_NAMES.md 4.1; ops.rs)
+
+        /// The most periods `extend` can add now: a name (from `periodStart`) holds at most
+        /// `maxYears` periods (ops.rs `extendable_years`).
+        func extendableYears(periodStart: Int64, expiresAt: Int64) -> Int64 {
+            let room = periodStart + maxYears * periodMs - expiresAt
+            return room < 0 ? 0 : min(room / periodMs, maxYears)
+        }
+
+        func extendableYears(_ f: NameFields) -> Int64 { extendableYears(periodStart: f.periodStart, expiresAt: f.expiresAt) }
+
+        /// When `renew` becomes valid: `expiresAt - renewWindowMs` (unix ms). The transaction is
+        /// final once the network's past median time passes its lock time, which is at least this.
+        func renewOpens(expiresAt: Int64) -> Int64 { expiresAt - renewWindowMs }
+
+        /// How close to expiry a name counts as "expires soon" (a buyer would have to renew it):
+        /// 30 days on a yearly clock, the renewal window on a short one (testnet's 2 hours),
+        /// where 30 days would cover every name.
+        var expiresSoonMs: Int64 { max(renewWindowMs, min(30 * 86_400_000, periodMs / 12)) }
+    }
+
+    /// Registry v5's `params.migration` (kachat-domains docs/REGISTRY_V5.md section 4): the old
+    /// registry's names, frozen in a Merkle snapshot the new gap imports. Baked into the v5 gap
+    /// (so its template hash is per deployment).
+    struct Migration: Equatable {
+        let predecessorRegistryId: Data
+        let root: Data
+        let deadlineMs: Int64
+        /// x-only key that may import for the snapshot owners (zero: owners only)
+        let sponsor: Data
+    }
+
+    /// The deployment manifest `kachat-names-<network>.json` (written by the kachat-domains CLI's
+    /// `genesis`, served by the indexer at `GET /names/manifest`): params, every contract's prefix,
+    /// suffix, template hash and dispatch tags, the registry covenant id and the genesis binding
+    /// (registry v4: no price covenant). `verify()` must pass before anything
+    /// trusts it.
+    struct Manifest {
+        /// The networks with a live registry: testnet-10, and mainnet since its launch on
+        /// 2026-10-09 ("mainnet v1", kachat-domains docs/MAINNET.md).
+        static let supportedNetworks: Set<String> = ["testnet-10", "mainnet"]
+
+        /// The manifest the app ships for a network (`Resources/<this>.json`).
+        static func bundleResource(network: String) -> String { "kachat-names-\(network)" }
+
+        /// Registry versions this app builds for: v4, and v5 (v4 plus `import` from a migration
+        /// snapshot, kachat-domains docs/REGISTRY_V5.md).
+        static let supportedVersions: Set<Int> = [4, 5]
+
+        /// Template hashes of the pinned build by registry version (silverc v1.0.0 @ 3ed9733),
+        /// testnet-10 params on the day clock: 24-hour periods, 6-hour grace, 2-hour renewal window
+        /// (kachat-domains artifacts/testnet10/build-info.json). The v4 gap and the name bake only
+        /// the params - their fixed prices included - so they are pinned before any genesis. The
+        /// v5 gap also bakes its migration (snapshot root, deadline, sponsor) and the offer the
+        /// registry id, so their hashes exist per deployment: `deployedTemplateHashes`. Until every
+        /// template is pinned only a bundled manifest is trusted (`verify(source:)`), never one an
+        /// indexer serves - an unpinned offer template could hold buyers' funds in a script the
+        /// indexer controls (IOS-059).
+        static let pinnedTemplateHashes: [String: [Int: [String: String]]] = [
+            "testnet-10": testnetPins,
+            // mainnet v1 (2026-10-09): the v4 contracts under params/mainnet.json - yearly
+            // periods, 90-day grace, 30-day renewal window (kachat-domains artifacts/mainnet)
+            "mainnet": [
+                4: [
+                    "KachatGap": "d70afe60686842b92ec8b4f6da34eb20462f0a98c26922de62b82ae65cfc1d4f",
+                    "KachatName": "259e0250a2bba8587a74b2ad366c45916565593db6eb44c3751dacba943f19d6"
+                ]
+            ]
+        ]
+
+        private static let testnetPins: [Int: [String: String]] = [
+            4: [
+                "KachatGap": "9f057f406361583eb2b94956825f86a2d8cc47d3c8800f05855a3e75b39d8bf5",
+                "KachatName": "c263a8c2cb4bdfac3234675114fc3ce4ba5a1d26c12e887c3d3b2ca89460b56b"
+            ],
+            // the audited contracts (kachat-domains fbd9cf2, audit C2: no other covenant's input
+            // shares the fee) - the name changed with them
+            5: [
+                "KachatName": "9d4f91bfd7aea47f8529104d260dc7b80c673fe04e2595b21abe47209c39e0e8"
+            ]
+        ]
+
+        /// The price tables the pinned gap and name bake, per network (kachat-domains
+        /// params/<network>.json): a manifest whose params say otherwise would show and charge
+        /// prices the contracts don't. Testnet is mainnet / 100.
+        static let pinnedRegisterPrices: [String: [UInt64]] = [
+            "testnet-10": [4_000_000_000, 2_000_000_000, 1_000_000_000, 250_000_000, 35_000_000],
+            "mainnet": [400_000_000_000, 200_000_000_000, 100_000_000_000, 25_000_000_000, 3_500_000_000]
+        ]
+        static let pinnedRenewPrices: [String: [UInt64]] = [
+            "testnet-10": [1_000_000_000, 500_000_000, 250_000_000, 62_500_000, 8_750_000],
+            "mainnet": [100_000_000_000, 50_000_000_000, 25_000_000_000, 6_250_000_000, 875_000_000]
+        ]
+
+        /// The per-deployment builds (the offer; on v5 also the gap) each deployed registry was
+        /// launched with, by registry covenant id. A manifest for one of these registries must
+        /// carry exactly this; any other registry (a dry run, the test vectors) has no such pin, so
+        /// only a bundled manifest of it is trusted.
+        static let deployedTemplateHashes: [String: [String: String]] = [
+            // mainnet v1, 2026-10-09 20:39 UTC: genesis a0281841..90ff
+            "348bd2c81170f267a2a7039cbf3a6f275e80b189d6c956183ea73ff3ffde75a4": [
+                "KachatOffer": "7e7f2461f475f7196eabd9fca2f945fbf660c27d40b7f65e2c6a9dc2c0ae63e4"
+            ],
+            // testnet-10 registry v5 on the audited contracts, 2026-10-09: genesis b6223f0f..e24f,
+            // imports the drill registry fdc403f5..571d (snapshot of 6 names); offerMaxFee 0.1 KAS
+            "1283f749506c454488a6b7264197658ed1c12051f1887905c4396243a89fbfa2": [
+                "KachatGap": "9fe90632a60e8771f2b8ac5e4368d5f4a2990fb9e5ad0fa6f3771b6287ee4242",
+                "KachatOffer": "7cb988f2b608aa5575bed8455b006f4ce11b8c2ac09aae377d41b1f94c935100"
+            ],
+            // testnet-10 registry v4 on the day clock, 2026-10-07: genesis 5ffdd006..a777 (the
+            // 10-minute deployment bff18554..0e2f before it is retired: its gap and name aren't pinned)
+            "e6b7244831004e1db928458bce570347317b50ff124c010d342d73a6c2017f0d": [
+                "KachatOffer": "5a7e22af319bac406769563b6b4b39b05c3aac145375ccaaada4095960372a7a"
+            ]
+        ]
+        static let stateLengths: [String: Int] = ["KachatGap": 66, "KachatName": 126, "KachatOffer": 108]
+        static func entries(_ contract: String, version: Int) -> [String] {
+            if contract == "KachatGap", version >= 5 { return ["register", "merge", "absorbed", "import"] }
+            return entries[contract] ?? []
+        }
+        static let entries: [String: [String]] = [
+            "KachatGap": ["register", "merge", "absorbed"],
+            "KachatName": ["transfer", "list", "buy", "extend", "renew", "release", "reclaim"],
+            "KachatOffer": ["accept", "decline", "withdraw", "refund"]
+        ]
+
+        /// Where a manifest came from: the app bundle (shipped with the build) or an indexer.
+        enum Source { case bundle, indexer }
+
+        let network: String
+        let status: String
+        let registryVersion: Int
+        let params: Params
+        let gap: Template
+        let name: Template
+        let offer: Template
+        let registryCovenantId: Data
+        let genesisTxid: Data
+        let genesisOutpoint: Outpoint
+        let genesisOutput: TxOutput
+        let genesisState: (lo: Data, hi: Data)
+
+        /// A manifest from a dry run describes a registry that does not exist.
+        var isDryRun: Bool { status.hasPrefix("dry run") }
+
+        // MARK: Decoding
+
+        static func decode(_ data: Data) throws -> Manifest {
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw Failure("manifest: not a JSON object")
+            }
+            return try Manifest(json: root)
+        }
+
+        private static func str(_ v: Any?, _ what: String) throws -> String {
+            guard let s = v as? String else { throw Failure("manifest: \(what) missing") }
+            return s
+        }
+
+        private static func u64(_ v: Any?, _ what: String) throws -> UInt64 {
+            guard let n = v as? NSNumber, n.int64Value >= 0 else { throw Failure("manifest: \(what) missing") }
+            return n.uint64Value
+        }
+
+        private static func tiers(_ v: Any?, _ what: String) throws -> [UInt64] {
+            guard let o = v as? [String: Any] else { throw Failure("manifest: \(what) missing") }
+            return try ["len1", "len2", "len3", "len4", "len5plus"].map { try u64(o[$0], "\(what).\($0)") }
+        }
+
+        private static func template(_ artifacts: [String: Any], _ contract: String) throws -> Template {
+            guard let a = artifacts[contract] as? [String: Any] else { throw Failure("manifest: \(contract) missing") }
+            let prefix = try unhex(try str(a["prefixHex"], "\(contract).prefixHex"))
+            let suffix = try unhex(try str(a["suffixHex"], "\(contract).suffixHex"))
+            let hash = try unhex32(try str(a["templateHash"], "\(contract).templateHash"))
+            guard let tagsJSON = a["dispatchTags"] as? [String: Any] else { throw Failure("manifest: \(contract).dispatchTags missing") }
+            var tags: [String: Data] = [:]
+            for (k, v) in tagsJSON {
+                let t = try unhex(try str(v, "\(contract).dispatchTags.\(k)"))
+                guard t.count == 4 else { throw Failure("manifest: \(contract) dispatch tag \(k) is not 4 bytes") }
+                tags[k] = t
+            }
+            let stateLength = stateLengths[contract] ?? 0
+            // the declared lengths and state span must agree with the bytes
+            if let pl = a["prefixLen"] as? NSNumber, pl.intValue != prefix.count { throw Failure("manifest: \(contract).prefixLen") }
+            if let sl = a["suffixLen"] as? NSNumber, sl.intValue != suffix.count { throw Failure("manifest: \(contract).suffixLen") }
+            if let span = a["stateSpan"] as? [String: Any] {
+                guard (span["offset"] as? NSNumber)?.intValue == prefix.count,
+                      (span["len"] as? NSNumber)?.intValue == stateLength else {
+                    throw Failure("manifest: \(contract).stateSpan")
+                }
+            }
+            if let bl = a["bytecodeLen"] as? NSNumber, bl.intValue != prefix.count + stateLength + suffix.count {
+                throw Failure("manifest: \(contract).bytecodeLen")
+            }
+            return Template(contract: contract, prefix: prefix, suffix: suffix, stateLength: stateLength, templateHash: hash, dispatchTags: tags)
+        }
+
+        private static func outpoint(_ v: Any?, _ what: String) throws -> Outpoint {
+            let op = try str(v, what).split(separator: ":")
+            guard op.count == 2, let idx = UInt32(op[1]) else { throw Failure("manifest: \(what)") }
+            return Outpoint(txid: try unhex32(String(op[0])), index: idx)
+        }
+
+        init(json root: [String: Any]) throws {
+            network = try Self.str(root["network"], "network")
+            status = (root["status"] as? String) ?? ""
+            // registry v1 - v3 manifests describe contracts this app no longer builds for; a later
+            // version needs a newer app
+            let version = (root["registryVersion"] as? NSNumber)?.intValue ?? 0
+            guard Self.supportedVersions.contains(version) else {
+                throw version > (Self.supportedVersions.max() ?? 0) ? Failure.newerRegistry : Failure.outdatedRegistry
+            }
+            registryVersion = version
+            guard let p = root["params"] as? [String: Any] else { throw Failure("manifest: params missing") }
+            var migration: Migration?
+            if version >= 5 {
+                guard let mj = p["migration"] as? [String: Any] else { throw Failure("manifest: params.migration missing (registry v5)") }
+                let mig = Migration(
+                    predecessorRegistryId: try unhex32(try Self.str(mj["predecessorRegistryId"], "migration.predecessorRegistryId")),
+                    root: try unhex32(try Self.str(mj["root"], "migration.root")),
+                    deadlineMs: Int64(try Self.u64(mj["deadlineMs"], "migration.deadlineMs")),
+                    sponsor: try unhex32(try Self.str(mj["sponsor"], "migration.sponsor"))
+                )
+                // root 0 and deadline 0: a v5 registry with no predecessor (register works as on v4)
+                migration = (mig.root == zero32 && mig.deadlineMs == 0) ? nil : mig
+            }
+            params = Params(
+                bond: try Self.u64(p["bond"], "bond"),
+                gapValue: try Self.u64(p["gapValue"], "gapValue"),
+                tCommit: try Self.u64(p["tCommit"], "tCommit"),
+                maxYears: Int64(try Self.u64(p["maxYears"], "maxYears")),
+                periodMs: Int64(try Self.u64(p["periodMs"], "periodMs")),
+                graceMs: Int64(try Self.u64(p["graceMs"], "graceMs")),
+                renewWindowMs: Int64(try Self.u64(p["renewWindowMs"], "renewWindowMs")),
+                registerPrices: try Self.tiers((p["prices"] as? [String: Any])?["register"], "prices.register"),
+                renewPrices: try Self.tiers((p["prices"] as? [String: Any])?["renew"], "prices.renew"),
+                offerMaxFee: try Self.u64(p["offerMaxFee"], "offerMaxFee"),
+                migration: migration
+            )
+            guard let artifacts = root["artifacts"] as? [String: Any] else { throw Failure("manifest: artifacts missing") }
+            gap = try Self.template(artifacts, "KachatGap")
+            name = try Self.template(artifacts, "KachatName")
+            offer = try Self.template(artifacts, "KachatOffer")
+            registryCovenantId = try unhex32(try Self.str(root["registryCovenantId"], "registryCovenantId"))
+            guard let g = root["genesis"] as? [String: Any] else { throw Failure("manifest: genesis missing") }
+            genesisTxid = try unhex32(try Self.str(g["txid"], "genesis.txid"))
+            genesisOutpoint = try Self.outpoint(g["outpoint"], "genesis.outpoint")
+            guard let outs = g["authorizedOutputs"] as? [[String: Any]], outs.count == 1 else {
+                throw Failure("manifest: the genesis must authorize exactly one output")
+            }
+            let o = outs[0]
+            guard (o["index"] as? NSNumber)?.intValue == 0 else { throw Failure("manifest: the genesis gap is not output 0") }
+            genesisOutput = TxOutput(
+                value: try Self.u64(o["value"], "genesis value"),
+                scriptVersion: UInt16(try Self.u64(o["scriptPublicKeyVersion"], "genesis spk version")),
+                script: try unhex(try Self.str(o["scriptPublicKey"], "genesis spk")),
+                covenant: nil
+            )
+            guard let st = o["state"] as? [String: Any] else { throw Failure("manifest: genesis state missing") }
+            genesisState = (try unhex32(try Self.str(st["lo"], "genesis lo")), try unhex32(try Self.str(st["hi"], "genesis hi")))
+        }
+
+        // MARK: Verification
+
+        /// Checks everything the app relies on (KACHAT_NAMES_INDEXER.md B2, kachat-domains
+        /// `manifest::load`): a network with a live registry, and a version this app has pins
+        /// for there; every template's hash recomputed from its prefix and
+        /// suffix and equal to the pinned build where pinned (an indexer-served manifest needs every
+        /// hash pinned); every dispatch tag present; the gap baked for this name template, the
+        /// offer for this registry id and name template; both price tables complete and in range;
+        /// the genesis output is the genesis gap `(00..00, ff..ff)` worth `gapValue`; and
+        /// `registryCovenantId == covenant_id(genesis outpoint, [(0, genesis gap)])`.
+        func verify(source: Source = .bundle) throws {
+            guard Self.supportedNetworks.contains(network) else {
+                throw Failure("manifest is for \(network), which has no .kachat registry in this app")
+            }
+            guard let versionPins = Self.pinnedTemplateHashes[network]?[registryVersion] else {
+                throw Failure("manifest: registry v\(registryVersion) isn't pinned for \(network) in this app")
+            }
+            let pins = versionPins
+                .merging(Self.deployedTemplateHashes[hex(registryCovenantId)] ?? [:]) { pinned, _ in pinned }
+            for t in [gap, name, offer] {
+                guard Codec.templateHash(prefix: t.prefix, suffix: t.suffix) == t.templateHash else {
+                    throw Failure("manifest: \(t.contract) template hash does not match its prefix and suffix")
+                }
+                if let pinned = pins[t.contract] {
+                    guard hex(t.templateHash) == pinned else { throw Failure("manifest: \(t.contract) is not the pinned build") }
+                } else if source == .indexer {
+                    throw Failure("manifest: \(t.contract) is not pinned in this app; only a bundled manifest is trusted")
+                }
+                for e in Self.entries(t.contract, version: registryVersion) where t.dispatchTags[e] == nil {
+                    throw Failure("manifest: \(t.contract) dispatch tag for \(e) missing")
+                }
+            }
+            guard gap.suffix.range(of: name.templateHash) != nil else { throw Failure("manifest: the gap is not built for this name template") }
+            if let mig = params.migration {
+                // the v5 gap bakes its snapshot root and sponsor (the deadline is a number)
+                guard gap.suffix.range(of: mig.root) != nil, mig.sponsor == zero32 || gap.suffix.range(of: mig.sponsor) != nil else {
+                    throw Failure("manifest: the gap is not built for this migration snapshot")
+                }
+                guard mig.predecessorRegistryId != registryCovenantId else { throw Failure("manifest: a registry can't import itself") }
+            }
+            guard offer.suffix.range(of: registryCovenantId) != nil, offer.suffix.range(of: name.templateHash) != nil else {
+                throw Failure("manifest: the offer is not built for this registry id and name template")
+            }
+            let priceCap: UInt64 = 100_000_000_000_000_000 // scripts/build.py
+            guard params.registerPrices.count == 5, params.renewPrices.count == 5,
+                  (params.registerPrices + params.renewPrices).allSatisfy({ $0 <= priceCap }),
+                  params.maxYears >= 1, params.maxYears <= 31,
+                  params.periodMs >= 60_000, params.periodMs <= yearMs, params.maxYears * params.periodMs < 1_000_000_000_000,
+                  params.renewWindowMs > 0, params.renewWindowMs <= params.periodMs else {
+                throw Failure("manifest: params out of range")
+            }
+            guard params.registerPrices == Self.pinnedRegisterPrices[network], params.renewPrices == Self.pinnedRenewPrices[network] else {
+                throw Failure("manifest: the price tables are not the ones the pinned gap and name bake")
+            }
+            guard genesisState.lo == zero32, genesisState.hi == ff32 else { throw Failure("manifest: genesis gap is not (00..00, ff..ff)") }
+            let gapScript = gap.script(Codec.gapState(lo: zero32, hi: ff32))
+            guard genesisOutput.script == gapScript, genesisOutput.scriptVersion == 0 else {
+                throw Failure("manifest: genesis output is not the genesis gap of these templates")
+            }
+            guard genesisOutput.value == params.gapValue else { throw Failure("manifest: genesis gap value") }
+            let id = Codec.covenantId(outpoint: genesisOutpoint, authorized: [(0, genesisOutput)])
+            guard id == registryCovenantId else {
+                throw Failure("manifest: registry id \(hex(registryCovenantId)) != covenant_id(genesis) \(hex(id))")
+            }
+        }
+    }
+}

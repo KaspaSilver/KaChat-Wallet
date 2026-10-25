@@ -1,0 +1,957 @@
+import Foundation
+import Combine
+import UIKit
+import UserNotifications
+import CryptoKit
+
+/// RPC connection status for the status indicator
+enum RpcConnectionStatus {
+    case connected      // UTXO subscription confirmed (green)
+    case connecting     // Connection is being established (orange)
+    case disconnected   // Not connected (red)
+
+    var color: String {
+        switch self {
+        case .connected: return "green"
+        case .connecting: return "orange"
+        case .disconnected: return "red"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting"
+        case .disconnected: return "Disconnected"
+        }
+    }
+}
+
+enum CatchUpSyncTrigger: String {
+    case appActive = "app-active"
+    case subscriptionRestart = "subscription-restart"
+    case rpcSubscriptionsRestored = "rpc-subscriptions-restored"
+    case pushMarkedUnreliable = "push-marked-unreliable"
+}
+
+@MainActor
+final class ChatService: ObservableObject {
+    static let shared = ChatService()
+
+    @Published var conversations: [Conversation] = [] {
+        didSet {
+            scheduleBadgeUpdate()
+            scheduleChatListSnapshotPersist()
+        }
+    }
+    @Published var isLoading = false
+    @Published var error: KasiaError?
+    @Published var declinedContacts: Set<String> = []
+    /// Message Requests state per wallet (`ChatRequestState`), loaded on first use - see the
+    /// Message Requests section of ChatService+Conversations.swift.
+    var chatRequestCache: [String: ChatRequestState] = [:]
+    /// Bumped on every accept / reject / private / block change, so lists re-filter.
+    @Published var chatRequestsRevision = 0
+    /// Whether each indexer answers inbox lookups (`KasiaAPIClient.probeInboxSupport`).
+    var inboxSupportByIndexer: [String: Bool] = [:]
+    var inboxSyncInFlight = false
+    @Published var replyingTo: ChatMessage?
+    /// The message whose text the composer is editing (the user's own) - see `sendEdit`.
+    @Published var editingMessage: ChatMessage?
+    /// This wallet's reactions, keyed by the txId of the message they target - loaded once per
+    /// conversation (see `loadReactions(for:)`) and kept live afterward by `sendReaction`/the
+    /// incoming-reaction interception in `addMessageToConversation` applying updates directly,
+    /// rather than a Core Data change-notification round trip for every update.
+    @Published var reactionsByTxId: [String: [MessageStore.ReactionSnapshot]] = [:]
+    /// The newest edit per message txId, for the open conversation - see `MessageEditCodec`.
+    @Published var editsByTxId: [String: MessageEditSnapshot] = [:]
+    /// Newest reaction per contact, across every message in that conversation - not scoped to
+    /// whichever single conversation is currently open (unlike `reactionsByTxId`), since the chat
+    /// list needs this for every row at once. Refreshed by `refreshLatestReactionPreviews()`; see
+    /// `ChatListView`'s `ConversationRow` for where it's compared against `lastMessage.timestamp`.
+    @Published var latestReactionByContact: [String: MessageStore.LatestReactionPreview] = [:]
+    var settingsViewModel: SettingsViewModel?
+    var cachedSettings = SettingsViewModel.loadSettings()
+    @Published var activeConversationAddress: String?
+    enum ChatFetchState {
+        case loading
+        case failed
+    }
+    @Published var chatFetchStates: [String: ChatFetchState] = [:]
+
+    /// Sets (or clears, with nil) a contact's fetch state, publishing only when it changes.
+    /// Every chat list row reads this dictionary, and a same-value write - removing a key that
+    /// is not there, re-marking a loading contact loading - still re-rendered all of them, twice
+    /// per contact on every full sync.
+    func setChatFetchState(_ state: ChatFetchState?, for address: String) {
+        guard chatFetchStates[address] != state else { return }
+        if let state {
+            chatFetchStates[address] = state
+        } else {
+            chatFetchStates.removeValue(forKey: address)
+        }
+    }
+
+    /// Per-contact last-read blockTime, seeded from the persisted read cursor when messages are
+    /// loaded from the store and advanced when a chat is read. `addMessageToConversation` consults
+    /// it so the initial full re-sync (which re-fetches all history with `lastPollTime == 0`) never
+    /// counts an already-read message as unread - the txId dedup alone misses messages re-fetched
+    /// below the trimmed in-memory window. Unseeded contacts default to 0 (no gating), preserving
+    /// existing behavior. Cleared on wallet switch.
+    var readCursorByAddress: [String: Int64] = [:]
+
+    /// Cache for the persisted per-wallet import baseline (ms since epoch) - the moment the
+    /// wallet first landed on this device. Everything mined before it is history a re-import or
+    /// backfill fetches, not new mail, so `addMessageToConversation` treats it as a floor on the
+    /// per-contact read cursor (no unread badges, no local notifications for backfilled history).
+    /// 0 / absent for wallets imported before this existed, which disables the gate entirely and
+    /// preserves their old behavior. See `recordWalletImportBaseline` / `walletImportBaselineMs`.
+    var cachedWalletImportBaseline: (address: String, blockTimeMs: Int64)?
+
+    enum ContactFetchResult {
+        case success(added: Bool)
+        case failure
+    }
+
+    var chatFetchCounts: [String: Int] = [:]
+    var chatFetchFailed: Set<String> = []
+
+    /// Pending navigation from notification tap (used when app launches from terminated state)
+    @Published var pendingChatNavigation: String?
+    /// A tapped profile link: the chat list opens User Info for this address
+    /// (`KaChatLinkRouter.openProfile`).
+    @Published var pendingProfileAddress: String?
+
+    /// Images handed over from the Share Extension, keyed by contact address. Staged here until
+    /// that contact's chat opens, then attached to the composer as a pending photo
+    /// (see `ChatDetailView.attachPendingShareImageIfAvailable`). Session-only by design.
+    var pendingShareImages: [String: Data] = [:]
+
+    func stagePendingShareImage(_ data: Data, for contactAddress: String) {
+        pendingShareImages[contactAddress] = data
+    }
+
+    func pendingShareImage(for contactAddress: String) -> Data? {
+        pendingShareImages[contactAddress]
+    }
+
+    func clearPendingShareImage(for contactAddress: String) {
+        pendingShareImages.removeValue(forKey: contactAddress)
+    }
+
+    // Connection status properties
+    @Published var isRpcSubscribed = false
+    @Published var lastSuccessfulSyncDate: Date?
+    // Connection node + latency live on a DEDICATED observable, not @Published here: they update
+    // ~every 2s (latency EWMA) and are shown ONLY in the connection-detail screen, but as
+    // @Published on this shared @EnvironmentObject each tick re-rendered every observer,
+    // including the chat thread. NodeConnectionInfo.shared is watched only by that screen.
+    var currentConnectedNode: String? {
+        get { NodeConnectionInfo.shared.currentConnectedNode }
+        set { NodeConnectionInfo.shared.currentConnectedNode = newValue }
+    }
+    var currentNodeLatencyMs: Int? {
+        get { NodeConnectionInfo.shared.currentNodeLatencyMs }
+        set { NodeConnectionInfo.shared.currentNodeLatencyMs = newValue }
+    }
+
+    struct QueuedUtxoNotification {
+        let parsed: ParsedUtxosChangedNotification
+        let txIds: Set<String>
+    }
+
+    enum OutgoingAttemptPhase {
+        case queued
+        case submitting
+        case submitted
+        case failed
+    }
+
+    struct OutgoingTxAttempt {
+        let messageId: UUID
+        let pendingTxId: String
+        let contactAddress: String
+        let messageType: ChatMessage.MessageType
+        var txId: String?
+        var phase: OutgoingAttemptPhase
+        var updatedAt: Date
+    }
+
+    struct SyncObjectCursor: Codable {
+        var lastFetchedBlockTime: UInt64
+    }
+
+    enum PushReliabilityState: String {
+        case disabled
+        case unknown
+        case reliable
+        case unreliable
+    }
+
+    struct PendingPushObservation {
+        let txId: String
+        let senderAddress: String
+        let observedAt: Date
+    }
+
+    struct KNSTransferChatHint {
+        let txId: String
+        let domainName: String
+        let domainId: String
+        let counterpartyAddress: String
+        let isOutgoing: Bool
+        let timestampMs: UInt64
+    }
+
+    /// Computed connection status based on node subscription state
+    var connectionStatus: RpcConnectionStatus {
+        let nodePoolState = NodePoolService.shared.subscriptionState
+        switch nodePoolState {
+        case .subscribed:
+            return .connected
+        case .connecting, .failover:
+            return .connecting
+        case .disconnected, .failed:
+            break
+        }
+        if isRpcSubscribed {
+            return .connected
+        }
+        return .disconnected
+    }
+
+    let apiClient = KasiaAPIClient.shared
+    let contactsManager = ContactsManager.shared
+    let userDefaults = UserDefaults.standard
+    let messageStore = MessageStore.shared
+    var messageSyncTask: Task<Void, Never>?
+    var messageStoreReloadTask: Task<Void, Never>?
+    var lastMessageStoreReloadAt: Date = .distantPast
+#if targetEnvironment(macCatalyst)
+    let messageStoreReloadMinInterval: TimeInterval = 2.5
+#else
+    let messageStoreReloadMinInterval: TimeInterval = 1.0
+#endif
+    // Keep only a recent in-memory slice per conversation by default.
+    // Older pages are loaded on demand in ChatDetailView.
+    // `nonisolated static` (not an instance property) so `trimMessagesForMemory` can stay
+    // `nonisolated static` and run off the main actor - see that function's doc comment. `static`
+    // alone isn't enough: a static member of an `@MainActor` type is still actor-isolated by
+    // default unless explicitly marked `nonisolated` too.
+    nonisolated static let inMemoryConversationWindowSize = 160
+
+    /// The background load of the open chat's whole history (see `loadFullHistory`).
+    var fullHistoryLoadTask: Task<Void, Never>?
+    /// The chat most recently left, trimmed back to the in-memory window once the chat list is
+    /// showing again (`trimLeftConversationIfNeeded`).
+    var lastLeftConversationAddress: String?
+
+    /// Whether the app posts its OWN banners for the messages, group traffic, public chats and
+    /// KaPosts activity it discovers itself - through the UTXO subscription, the sweep, the
+    /// open-chat poll, background fetch, or a silent push.
+    ///
+    /// False: the remote alert push is the only banner source, exactly as when the app is fully
+    /// closed. The app used to banner from both, with per-txId ledgers and races to keep one
+    /// message from notifying twice, and the seams showed: the same message arriving as two
+    /// differently-worded banners, or a foreground push dropped on the assumption a local one
+    /// would follow. Discovery still runs and the data is still fresh when the app opens; it just
+    /// no longer announces it. Public Chat rooms the push server does not index, and any message
+    /// the push service misses, notify nothing - that is the trade, made on purpose. The
+    /// posting paths and their ledgers stay behind this switch rather than being torn out, so
+    /// the choice is one line to revisit.
+    nonisolated static let localBannersEnabled = false
+    struct PendingOutgoingRef {
+        let txId: String
+        let messageType: ChatMessage.MessageType
+        let timestamp: Date
+    }
+    var pendingOutgoingQueue: [String: [PendingOutgoingRef]] = [:]
+    var olderHistoryPageTasks: [String: Task<Int, Never>] = [:]
+    var olderHistoryExhaustedContacts: Set<String> = []
+    var needsMessageStoreSyncAfterBatch = false
+    var lastMessageStoreSyncScheduledAt: Date?
+    let messageStoreSyncMinInterval: TimeInterval = 5.0
+    var dirtyConversationAddresses = Set<String>()
+    var lastFullStoreMaintenanceAt: Date = .distantPast
+    let fullStoreMaintenanceInterval: TimeInterval = 600
+    var legacyMigrationScheduled = false
+    var resolveRetryCounts: [String: Int] = [:]
+    var resolveRetryTasks: [String: Task<Void, Never>] = [:]
+    var incomingResolutionPendingTxIds = Set<String>()
+    var incomingResolutionWarningTxIds = Set<String>()
+    var incomingResolutionAmountHints: [String: UInt64] = [:]
+    var hiddenPaymentTxIdTimestamps: [String: UInt64] = [:]
+    var knsTransferHintsByTxId: [String: KNSTransferChatHint] = [:]
+    let incomingResolutionMaxAdditionalRetries = 10
+    let incomingResolutionBaseDelayNs: UInt64 = 2_000_000_000
+    let incomingResolutionMaxDelayNs: UInt64 = 300_000_000_000
+    let hiddenPaymentTxMaxAgeMs: UInt64 = 30 * 24 * 60 * 60 * 1000
+    var selfStashRetryCounts: [String: Int] = [:]
+    var selfStashFirstAttemptAt: [String: Date] = [:]
+    var mempoolResolveInFlight = Set<String>()
+    var mempoolResolvedTxIds = Set<String>()
+    var mempoolPayloadByTxId: [String: String] = [:]
+    var contextualFetchInFlight = Set<String>()
+    var handshakeFetchTasks: [String: Task<[HandshakeResponse], Error>] = [:]
+    var paymentFetchTasks: [String: Task<[PaymentResponse], Error>] = [:]
+    let messagesKey = "kachat_messages"
+    let draftsKey = "kachat_message_drafts"
+    let aliasesKey = "kachat_conversation_aliases"
+    let ourAliasesKey = "kachat_our_aliases"
+    let conversationPrimaryAliasesKey = "kachat_conversation_aliases_primary"
+    let ourPrimaryAliasesKey = "kachat_our_aliases_primary"
+    let conversationAliasUpdatedAtKey = "kachat_conversation_aliases_updated_at"
+    let ourAliasUpdatedAtKey = "kachat_our_aliases_updated_at"
+    let conversationIdsKey = "kachat_conversation_ids"
+    let declinedContactsKey = "kachat_declined_contacts"
+    /// The sync high-water marks, kept per network (IOS-004): one key is one account on both
+    /// networks, but each chain has its own history, so a time synced on testnet must never be
+    /// where mainnet starts reading (and the other way round). Mainnet keeps the original keys.
+    /// The network is fixed for the process (a switch applies at launch), so these are stable.
+    var lastPollTimeKey: String { Self.networkScopedKey("kachat_last_poll_time") }
+    var syncCursorsKey: String { Self.networkScopedKey("kachat_sync_object_cursors") }
+
+    static func networkScopedKey(_ base: String, network: NetworkType = AppSettings.load().networkType) -> String {
+        network == .mainnet ? base : "\(base)_\(network.rawValue)"
+    }
+
+    /// Once: the unscoped keys held whichever network synced last. If that is testnet (the app
+    /// runs on it now), they move to the testnet keys and mainnet starts without a cursor - a
+    /// full re-read, instead of starting from testnet's time and missing mainnet history.
+    static func migrateSyncCursorsToNetworkScopeIfNeeded(_ defaults: UserDefaults) {
+        let doneKey = "kachat_sync_cursors_network_scoped"
+        guard !defaults.bool(forKey: doneKey) else { return }
+        defaults.set(true, forKey: doneKey)
+        guard AppSettings.load().networkType == .testnet else { return }
+        for base in ["kachat_last_poll_time", "kachat_sync_object_cursors"] {
+            let scoped = networkScopedKey(base, network: .testnet)
+            if defaults.object(forKey: scoped) == nil, let value = defaults.object(forKey: base) {
+                defaults.set(value, forKey: scoped)
+            }
+            defaults.removeObject(forKey: base)
+        }
+    }
+    let pendingSelfStashKey = "kachat_pending_self_stash"
+    let routingStatesKey = "kachat_routing_states"
+    let deterministicMigrationDoneKey = "kachat_deterministic_migration_done"
+    let pushReliabilityStateKey = "kachat_push_reliability_state"
+    let pushConsecutiveMissesKey = "kachat_push_consecutive_misses"
+    let pushLastCatchUpSyncAtKey = "kachat_push_last_catchup_sync_at"
+    let pushLastReregisterAtKey = "kachat_push_last_reregister_at"
+    let hiddenPaymentTxIdsKey = "kachat_hidden_payment_tx_ids_v1"
+    let syncReorgBufferMs: UInt64 = 600_000
+    /// Short reorg rewind for the HIGH-FREQUENCY live-tail fetch paths (the ~2s open-chat poll
+    /// and the 5s foreground contact sweep). Rewinding the cursor a full 10 minutes on every
+    /// one of those fetches re-downloaded the same recent window hundreds of times per hour;
+    /// 90s still comfortably covers real reorg depth for a poll that just ran seconds ago, and
+    /// the txId dedupe in `addMessageToConversation` remains the safety net. Catch-up syncs
+    /// (subscription restore, app-active, push-triggered) keep the full `syncReorgBufferMs`.
+    let liveTailReorgBufferMs: UInt64 = 90_000
+
+    var activeContacts: [Contact] {
+        contactsManager.activeContacts
+    }
+
+    var currentSettings: AppSettings {
+        settingsViewModel?.settings ?? cachedSettings
+    }
+
+    /// Delay between syncs when UTXO subscription is inactive (60 seconds after last sync completes)
+    let pollDelayAfterSync: TimeInterval = 60.0
+
+    var pollTask: Task<Void, Never>?
+    /// Fast per-contact indexer poll for the CURRENTLY-OPEN 1:1 chat. iOS otherwise relies only
+    /// on the confirmation-gated utxosChanged push for live DMs (no foreground indexer poll at
+    /// all, unlike desktop's 5s and Android's 2s loops), which made new incoming messages in an
+    /// open chat lag. This gives the actively-viewed conversation ~2s delivery.
+    var activeChatPollTask: Task<Void, Never>?
+    /// Foreground defense-in-depth indexer sweep over ALL active contacts (desktop polls every
+    /// 5s, Android every 2s; iOS otherwise trusts the utxosChanged push alone for closed chats).
+    /// Serial per-contact `fetchContextualMessagesFromContact` calls, ~30s between sweeps, backs
+    /// off on indexer failure. Runs only while the app is active AND the UTXO subscription is
+    /// down or unverified (see `isUtxoSubscriptionHealthy`); cancelled on background, wallet
+    /// switch/teardown and logout. Owned by `startForegroundContactSweep()`.
+    ///
+    /// It used to walk up to 40 contacts every 5 s whether or not the subscription was fine -
+    /// 250-480 indexer requests a minute on a busy wallet, more traffic than the subscription
+    /// it was backing up, and load on the indexer that grew with every user.
+    var foregroundSweepTask: Task<Void, Never>?
+    /// Interval between sweeps while the subscription is down; doubled (up to the max) after a
+    /// failed sweep so an unreachable indexer is never hammered in a tight loop, reset on the
+    /// next success.
+    let foregroundSweepBaseInterval: TimeInterval = 30.0
+    /// Sweep base interval on expensive (cellular/metered) paths. Resolved fresh each loop
+    /// iteration, so a WiFi/cellular flip takes effect on the next sweep.
+    let foregroundSweepExpensiveInterval: TimeInterval = 60.0
+    let foregroundSweepMaxInterval: TimeInterval = 120.0
+    /// Per-sweep contact cap. The few most recently active contacts are in every pass
+    /// (`foregroundSweepPinnedContacts`); the rest of the window rotates through everyone
+    /// else, so with many contacts each one is reached within a few passes rather than the
+    /// long tail never being reached at all.
+    let foregroundSweepMaxContacts = 12
+    let foregroundSweepPinnedContacts = 4
+    /// Where the rotating part of the sweep window resumes on the next pass.
+    var foregroundSweepRotationOffset = 0
+    /// How recently the primary subscription must have been verified alive for the sweep to
+    /// stand down: three keepalive periods, so one missed ping does not wake it.
+    let utxoSubscriptionFreshness: TimeInterval = 45.0
+    /// Group-chat backstop riding on the sweep loop. Live group delivery is the blockAdded
+    /// block-scan (GroupChatService), whose only recovery is a catch-up on scenePhase .active -
+    /// while the app SITS open, a block missed during a brief stream gap stayed missing until
+    /// the next background/foreground cycle. The sweep loop runs a cursor-based
+    /// `GroupChatService.performCatchUpSync()` at most once per this interval as the group
+    /// equivalent of the 1:1 contact sweep.
+    var lastForegroundGroupCatchUpAt: Date?
+    /// Every three minutes while group traffic is arriving live (the indexer poll, or the
+    /// block stream; the catch-up then only covers gaps), every minute while it is not.
+    var foregroundGroupCatchUpInterval: TimeInterval {
+        GroupChatService.shared.isLiveDeliveryActive ? 180.0 : 60.0
+    }
+    /// The one-shot 4-phase initial sync started by `startPolling`. Tracked so wallet transitions
+    /// (import/switch/logout) can cancel it - otherwise the previous wallet's historical sync keeps
+    /// running past the switch and writes its messages into the *new* wallet's store, leaking one
+    /// account's chats into another. Backed up by the write-time `isActiveWallet` guard.
+    var initialSyncTask: Task<Void, Never>?
+    var lastPollTime: UInt64 = 0
+    var syncObjectCursors: [String: SyncObjectCursor] = [:]
+    var syncObjectCursorsDirty = false
+    @Published var isSyncInProgress = false
+
+    // MARK: - Onboarding sync hold
+
+    /// While true, `startPolling` refuses to start anything.
+    ///
+    /// Importing a seed kicks off a full from-genesis sync of every contact the account has ever
+    /// talked to, and all of its ingest lands on the main actor. That was running underneath the
+    /// setup wizard, which is why typing through it crawled. The hold is taken the moment an
+    /// import/create decides a wizard is coming, and released when the wizard finishes (or
+    /// immediately, if it turns out no wizard is shown).
+    @Published private(set) var onboardingSyncHeld = false
+
+    /// Which phase the post-wizard initial sync is in, for its progress sheet. Nil when idle.
+    @Published private(set) var initialSyncPhase: InitialSyncPhase?
+
+    enum InitialSyncPhase: Equatable {
+        case handshakes
+        case subscribing
+        case localStore
+        case indexer
+        case finished
+
+        var label: String {
+            switch self {
+            case .handshakes: return "Finding your conversations"
+            case .subscribing: return "Connecting for live updates"
+            case .localStore: return "Loading saved messages"
+            case .indexer: return "Downloading message history"
+            case .finished: return "Finished"
+            }
+        }
+    }
+
+    func holdSyncForOnboarding() {
+        guard !onboardingSyncHeld else { return }
+        onboardingSyncHeld = true
+        AppLog.log("%@", "[ChatService] Sync held until onboarding finishes")
+    }
+
+    /// Releases the hold and, if a wallet is loaded, starts the sync that was being deferred.
+    /// Safe to call when no hold is in place.
+    func releaseSyncForOnboarding(startSync: Bool = true) {
+        guard onboardingSyncHeld else { return }
+        onboardingSyncHeld = false
+        AppLog.log("%@", "[ChatService] Onboarding finished, starting deferred sync")
+        guard startSync else { return }
+        startPolling()
+        Task { await GroupChatService.shared.performCatchUpSync() }
+    }
+
+    func setInitialSyncPhase(_ phase: InitialSyncPhase?) {
+        initialSyncPhase = phase
+    }
+    var syncMaxBlockTime: UInt64?
+    var isConfigured = false
+    /// On-chain payload kinds already read (see `onChainPayloadKind`), so each transaction is
+    /// fetched at most once per launch.
+    var onChainPayloadKinds: [String: OnChainPayloadKind] = [:]
+    /// When each old-style alias sync object was last queried successfully (in memory, so every
+    /// launch queries each once) - the slow lane in `shouldPollAlias`.
+    var legacyAliasPolledAtMs: [String: UInt64] = [:]
+    /// True after startPolling() completes its full initial sync (Phases 1-4).
+    /// Prevents redundant heavy re-sync on Mac Catalyst window reopen.
+    var hasCompletedInitialSync = false
+    var contactsCancellable: AnyCancellable?
+    /// `observeChattingBalanceForNotices`: payment notices waiting for the chatting address.
+    var unsentNoticesCancellable: AnyCancellable?
+    var sendingUnsentNotices = false
+    var settingsCancellable: AnyCancellable?
+    var pingLatencyCancellable: AnyCancellable?
+    var nodePoolSubscriptionStateCancellable: AnyCancellable?
+    var nodePoolPrimaryEndpointCancellable: AnyCancellable?
+
+    // UTXO subscription state for real-time payment notifications
+    var utxoSubscriptionToken: UUID?
+    var isUtxoSubscribed = false {
+        didSet {
+            isRpcSubscribed = isUtxoSubscribed
+            if !isUtxoSubscribed {
+                currentConnectedNode = nil
+                currentNodeLatencyMs = nil
+            }
+        }
+    }
+    var utxoFetchInFlight = false
+    var queuedUtxoNotifications: [QueuedUtxoNotification] = []
+    var lastPaymentFetchTime: UInt64 = 0
+    /// Payments may have been missed from this block time (ms) on: the next full sync fetches
+    /// them even while the UTXO subscription is up (`requestPaymentCatchUp`). nil = nothing missed.
+    var paymentCatchUpSince: UInt64?
+    var paymentCatchUpInFlight = false
+    /// KaPosts tips by pending id, so a retried tip is still a tip (`sendPaymentInternal`).
+    var pendingTips: [String: KaPostTip] = [:]
+
+    // Track in-flight resolve operations to prevent duplicates from multiple UTXO notifications
+    let inFlightResolveTracker = InFlightResolveTracker()
+
+    // Track if we've ever been subscribed (to detect restarts vs initial setup)
+    var hasEverBeenSubscribed = false
+
+    // Track subscribed address count to detect when resubscription is needed
+    var lastSubscribedAddressCount = 0
+    var lastSubscribedAddresses: Set<String> = []
+    var pendingResubscriptionTask: Task<Void, Never>?
+    var subscriptionBalanceRefreshTask: Task<Void, Never>?
+    var needsResubscriptionAfterSync = false
+    var catchUpSyncInFlight = false
+
+    // Push-channel reliability tracking (UTXO txId -> matching APNs delivery).
+    var pushReliabilityState: PushReliabilityState = .disabled
+    var pushConsecutiveMisses = 0
+    var pendingPushObservations: [String: PendingPushObservation] = [:]
+    var pushObservationTasks: [String: Task<Void, Never>] = [:]
+    var pushSeenByTxId: [String: Date] = [:]
+    var lastCatchUpSyncAt: Date?
+    var lastPushReregisterAt: Date?
+    let pushObservationGraceInterval: TimeInterval = 60
+    let pushLeadMatchTolerance: TimeInterval = 30
+    let pushObservationRetention: TimeInterval = 600
+    let reliablePushCatchUpDebounce: TimeInterval = 600
+    let pushReregisterCooldown: TimeInterval = 600
+
+    var badgeUpdateTask: Task<Void, Never>?
+    var chatListSnapshotPersistTask: Task<Void, Never>?
+    var pendingLastMessageUpdates: [UUID: Date] = [:]
+    var pendingLastMessageUpdateWorkItem: DispatchWorkItem?
+    let lastMessageBatchDelay: TimeInterval = 0.8
+
+    // Serialize all outgoing tx sends to avoid UTXO contention/orphan errors.
+    var outgoingTxTail: Task<Void, Never>?
+    var reservedMessageOutpoints: [String: Date] = [:]
+    var pendingMessageUtxos: [String: (utxo: UTXO, expiresAt: Date)] = [:]
+    let pendingMessageUtxoTTL: TimeInterval = 120
+    var outgoingAttemptsByMessageId: [UUID: OutgoingTxAttempt] = [:]
+    var outgoingAttemptByPendingTxId: [String: UUID] = [:]
+    var outgoingAttemptByRealTxId: [String: UUID] = [:]
+    let outgoingAttemptTTL: TimeInterval = 900
+    var scheduledSendRetries = Set<String>()
+    var noInputRetryCounts: [String: Int] = [:]
+    let spendableFundsRetryAttempts = 5
+    let spendableFundsRetryBaseDelay: TimeInterval = 0.1
+    var lastMessageCompactionAt: Date = .distantPast
+    let messageCompactionCooldown: TimeInterval = 30
+    let messageCompactionInputThreshold = 4
+    let messageCompactionFeeThresholdSompi: UInt64 = 5_000
+    let messageCompactionMaxInputs = 8
+    let messageCompactionTargetBurstMessages = 8
+
+    // Suppress notifications during initial sync after wallet import/create
+    var suppressNotificationsUntilSynced = false
+
+    // Maps contact address -> their aliases (for fetching their messages TO us)
+    var conversationAliases: [String: Set<String>] = [:]
+    // Maps contact address -> most recent incoming alias
+    var conversationPrimaryAliases: [String: String] = [:]
+    var conversationAliasUpdatedAt: [String: UInt64] = [:]
+    // Maps contact address -> OUR aliases (for fetching our messages TO them)
+    var ourAliases: [String: Set<String>] = [:]
+    // Maps contact address -> most recent outgoing alias
+    var ourPrimaryAliases: [String: String] = [:]
+    var ourAliasUpdatedAt: [String: UInt64] = [:]
+    // Deterministic alias routing state per contact
+    var routingStates: [String: ConversationRoutingState] = [:]
+    // Maps contact address -> conversation id from handshake
+    var conversationIds: [String: String] = [:]
+    // Drafts keyed by contact address
+    var messageDrafts: [String: String] = [:]
+    // Debounces the drafts' disk write so typing doesn't JSON-encode + write UserDefaults on the
+    // main thread on every keystroke (see setDraft / flushPendingDraftSave).
+    var draftSaveTask: Task<Void, Never>?
+    // Pending self-stash jobs that couldn't be sent due to missing UTXOs
+    var pendingSelfStash: [PendingSelfStash] = []
+    /// Contacts this wallet has a `saved_handshake` note for - read back by
+    /// `fetchSavedHandshakes`, or written/queued here - and whether a complete read-back has
+    /// happened yet, so `ensureContactStash` never writes a note it cannot know is missing.
+    /// Per wallet, loaded by `loadContactStashStateIfNeeded`.
+    var contactStashKnownAddresses: Set<String> = []
+    var contactStashIndexComplete = false
+    var contactStashStateWallet: String?
+    /// A pending self-stash send pass is running (`attemptPendingSelfStashSends`).
+    var isFlushingSelfStash = false
+    var cachedUtxos: [UTXO] = []
+    var cachedUtxosTimestamp: Date?
+    let utxoCacheInterval: TimeInterval = 20
+
+    var rpcReconnectObserver: NSObjectProtocol?
+    var conversationCountCancellable: AnyCancellable?
+    /// Keeps the notification extension's Message Requests lists current.
+    var chatRequestsShareCancellable: AnyCancellable?
+
+    private init() {
+        Self.migrateSyncCursorsToNetworkScopeIfNeeded(userDefaults)
+        lastPollTime = UInt64(userDefaults.integer(forKey: lastPollTimeKey))
+        migrateLegacyMessagesIfNeeded()
+        Task { @MainActor [weak self] in
+            await self?.loadMessagesFromStoreIfNeeded(onlyIfEmpty: true)
+            // One-time retroactive fix for messages stuck as "📤 Sent via another device"
+            // placeholders that were actually reactions, not real messages, from before
+            // `isKnownReaction`'s guards existed - see MessageStore.deleteStuckReactionPlaceholderMessages.
+            // The Core Data rows are already gone; also drop them from the in-memory
+            // conversations array already loaded above, so the UI doesn't keep showing them
+            // until the next full reload.
+            guard let self else { return }
+            let deletedTxIds = await self.messageStore.deleteStuckReactionPlaceholderMessages()
+            guard !deletedTxIds.isEmpty else { return }
+            let deletedSet = Set(deletedTxIds)
+            for index in self.conversations.indices {
+                self.conversations[index].messages.removeAll { deletedSet.contains($0.txId) }
+            }
+        }
+        loadMessageDrafts()
+        loadConversationAliases()
+        loadOurAliases()
+        loadConversationIds()
+        loadRoutingStates()
+        loadSyncObjectCursors()
+        loadPendingSelfStash()
+        loadDeclinedContacts()
+        loadPushReliabilityState()
+        loadHiddenPaymentTxIds()
+        observeContacts()
+        observeChattingBalanceForNotices()
+        observeSettings()
+        observeRpcReconnection()
+        observePingLatency()
+        observeNodePoolConnectionState()
+        observeConversationCount()
+        Task { @MainActor [weak self] in
+            await self?.messageStore.applyRetentionInBackground(SettingsViewModel.loadSettings().messageRetention)
+        }
+    }
+
+    func startReplyTo(_ message: ChatMessage) {
+        replyingTo = message
+    }
+
+    func cancelReply() {
+        replyingTo = nil
+    }
+
+    // MARK: - Edit
+
+    func startEditing(_ message: ChatMessage) {
+        replyingTo = nil
+        editingMessage = message
+    }
+
+    func cancelEditing() {
+        editingMessage = nil
+    }
+
+    /// Observe conversation count changes to trigger resubscription when new chats are added
+    private func observeConversationCount() {
+        conversationCountCancellable = $conversations
+            .map { $0.count }
+            .removeDuplicates()
+            .dropFirst()  // Skip initial value
+            .sink { [weak self] _ in
+                self?.checkAndResubscribeIfNeeded()
+            }
+        // A chat arriving, or an accept / reject / private change, can move someone in or out
+        // of Message Requests - the extension decides from these lists whether to ring.
+        chatRequestsShareCancellable = $conversations.map { _ in () }
+            .merge(with: $chatRequestsRevision.map { _ in () })
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.shareChatRequestsWithExtension()
+            }
+    }
+
+    func shareChatRequestsWithExtension() {
+        SharedDataManager.syncChatRequestsForExtension(
+            requests: messageRequests.map(\.contact.address),
+            blocked: Array(chatRequestState().blocked)
+        )
+    }
+
+    /// Observe NodePoolService ping latency for real-time latency updates.
+    /// Throttled + de-duplicated: the raw latency EWMA changes many times/second while the node
+    /// pool fires RPCs during the initial sync, and each change published `currentNodeLatencyMs`
+    /// (@Published) → a `ChatService.objectWillChange` recomputing every observer. The value is only
+    /// shown in the connection-detail sheet, so once every 2s (latest value) is plenty and keeps
+    /// this off the per-frame hot path.
+    private func observePingLatency() {
+        pingLatencyCancellable = NodePoolService.shared.$lastPingLatencyMs
+            .throttle(for: .seconds(2), scheduler: DispatchQueue.main, latest: true)
+            .removeDuplicates()
+            .sink { [weak self] latencyMs in
+                guard let latency = latencyMs else { return }
+                self?.currentNodeLatencyMs = latency
+            }
+    }
+
+    /// Observe NodePool subscription/primary endpoint as the source of truth for status UI
+    private func observeNodePoolConnectionState() {
+        nodePoolPrimaryEndpointCancellable = NodePoolService.shared.$primaryEndpoint
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] endpoint in
+                self?.currentConnectedNode = endpoint?.url
+            }
+
+        nodePoolSubscriptionStateCancellable = NodePoolService.shared.$subscriptionState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .subscribed:
+                    if !self.isUtxoSubscribed {
+                        self.isUtxoSubscribed = true
+                    }
+                case .disconnected, .failed:
+                    if self.isUtxoSubscribed {
+                        self.isUtxoSubscribed = false
+                    }
+                case .connecting, .failover:
+                    break
+                }
+            }
+    }
+
+    /// Observe RPC reconnection to sync after connection is restored
+    var rpcReconnectedObserver: NSObjectProtocol?
+    let chatHistoryArchiveVersion = 1
+
+    private func observeRpcReconnection() {
+        // Listen for subscription restoration (fetch missed messages)
+        rpcReconnectObserver = NotificationCenter.default.addObserver(
+            forName: .rpcSubscriptionsRestored,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            AppLog.log("[ChatService] RPC subscriptions restored - syncing to catch any missed messages")
+            Task { @MainActor in
+                // the dead window may have held a payment too: the UTXO notification for it
+                // never came and is not replayed
+                self?.requestPaymentCatchUp(lookBackMs: 15 * 60 * 1000)
+                // force: this notification only fires when the utxosChanged subscription was
+                // just found dead and re-armed - i.e. there WAS a window with no UTXO
+                // notifications. Push reliability is scored by correlating APNs receipts
+                // against UTXO-notified messages, so during that same dead window there were
+                // no observations and no way to accumulate misses: a stale "reliable" state
+                // cannot be trusted here. Skipping this catch-up on the push-reliable
+                // debounce is exactly the dead-subscription + wrongly-reliable-push hole
+                // that leaves the missed window's messages invisible until the user opens
+                // the chat.
+                await self?.maybeRunCatchUpSync(trigger: .rpcSubscriptionsRestored, force: true)
+            }
+        }
+
+        // Listen for connection restoration (re-subscribe)
+        rpcReconnectedObserver = NotificationCenter.default.addObserver(
+            forName: .rpcReconnected,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            AppLog.log("[ChatService] RPC reconnected - re-subscribing to UTXOs...")
+            Task { @MainActor in
+                self?.isUtxoSubscribed = false  // Reset subscription state
+                await self?.setupUtxoSubscription()
+            }
+        }
+    }
+
+    /// Clear all chat data (called when clearing app data)
+    /// - Parameter skipStoreClear: If true, skips calling messageStore.clearAll() (use when store was already cleared)
+    func clearAllData(skipStoreClear: Bool = false) {
+        stopPolling()
+        resetForNewWallet(skipStoreClear: skipStoreClear)
+        contactsCancellable?.cancel()
+        contactsCancellable = nil
+        settingsCancellable?.cancel()
+        settingsCancellable = nil
+        pingLatencyCancellable?.cancel()
+        pingLatencyCancellable = nil
+        nodePoolSubscriptionStateCancellable?.cancel()
+        nodePoolSubscriptionStateCancellable = nil
+        nodePoolPrimaryEndpointCancellable?.cancel()
+        nodePoolPrimaryEndpointCancellable = nil
+        conversationCountCancellable?.cancel()
+        conversationCountCancellable = nil
+        pendingResubscriptionTask?.cancel()
+        pendingResubscriptionTask = nil
+        // Block-based observers are only released by removing their token - `removeObserver(self)`
+        // does not reach them - so every token `init` registered is dropped here, not just the
+        // first. `resetForNewWallet()` deliberately keeps them: it is a data reset on wallet
+        // switch/logout, nothing re-registers them afterwards, and the handlers self-gate on
+        // the current wallet.
+        if let observer = rpcReconnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            rpcReconnectObserver = nil
+        }
+        if let observer = rpcReconnectedObserver {
+            NotificationCenter.default.removeObserver(observer)
+            rpcReconnectedObserver = nil
+        }
+    }
+
+    // NOTE: the Danger Zone wipe-and-resync now lives in
+    // `wipeAndResyncIncomingMessages(contacts:progress:)` (ChatService+Fetching.swift), driven
+    // by `IncomingResyncCoordinator` so it reports progress and survives view teardown.
+
+    /// Reset chat state for new/imported wallet - clears data but keeps polling active
+    /// - Parameter skipStoreClear: If true, skips calling messageStore.clearAll() (use when switching to a fresh wallet store)
+    func resetForNewWallet(skipStoreClear: Bool = false) {
+        // Cancel any sync work belonging to the previous wallet before we wipe in-memory state.
+        // The initial 4-phase sync task and the debounced message-store writer are otherwise
+        // untracked by stopPolling and would keep writing the old wallet's data after the switch.
+        pollTask?.cancel()
+        pollTask = nil
+        activeChatPollTask?.cancel()
+        activeChatPollTask = nil
+        stopForegroundContactSweep()
+        initialSyncTask?.cancel()
+        initialSyncTask = nil
+        messageSyncTask?.cancel()
+        messageSyncTask = nil
+        subscriptionRetryTask?.cancel()
+        subscriptionRetryTask = nil
+        pendingResubscriptionTask?.cancel()
+        pendingResubscriptionTask = nil
+        subscriptionBalanceRefreshTask?.cancel()
+        subscriptionBalanceRefreshTask = nil
+        let wasSuppressingSnapshotPersistence = suppressChatListSnapshotPersistence
+        suppressChatListSnapshotPersistence = true
+        conversations = []
+        suppressChatListSnapshotPersistence = wasSuppressingSnapshotPersistence
+        lastSubscribedAddressCount = 0
+        lastSubscribedAddresses = []
+        needsResubscriptionAfterSync = false
+        conversationAliases = [:]
+        conversationPrimaryAliases = [:]
+        conversationAliasUpdatedAt = [:]
+        ourAliases = [:]
+        ourPrimaryAliases = [:]
+        ourAliasUpdatedAt = [:]
+        conversationIds = [:]
+        pendingSelfStash = []
+        declinedContacts = []
+        lastPollTime = 0
+        syncObjectCursors = [:]
+        readCursorByAddress = [:]
+        syncObjectCursorsDirty = false
+        lastPaymentFetchTime = 0
+        isConfigured = false
+        isUtxoSubscribed = false
+        hasEverBeenSubscribed = false
+        cachedUtxos = []
+        cachedUtxosTimestamp = nil
+        catchUpSyncInFlight = false
+        pushReliabilityState = .disabled
+        pushConsecutiveMisses = 0
+        pendingPushObservations.removeAll()
+        for task in pushObservationTasks.values {
+            task.cancel()
+        }
+        pushObservationTasks.removeAll()
+        pushSeenByTxId.removeAll()
+        lastCatchUpSyncAt = nil
+        lastPushReregisterAt = nil
+        resolveRetryCounts = [:]
+        for (_, task) in resolveRetryTasks {
+            task.cancel()
+        }
+        resolveRetryTasks = [:]
+        incomingResolutionPendingTxIds = []
+        incomingResolutionWarningTxIds = []
+        incomingResolutionAmountHints = [:]
+        hiddenPaymentTxIdTimestamps = [:]
+        knsTransferHintsByTxId = [:]
+        suppressNotificationsUntilSynced = true  // Suppress notifications during initial sync
+        hasCompletedInitialSync = false  // Allow full re-sync for new wallet
+        // a new wallet starts from scratch on both networks
+        for network in NetworkType.allCases {
+            userDefaults.removeObject(forKey: Self.networkScopedKey("kachat_last_poll_time", network: network))
+            userDefaults.removeObject(forKey: Self.networkScopedKey("kachat_sync_object_cursors", network: network))
+        }
+        userDefaults.removeObject(forKey: messagesKey)
+        userDefaults.removeObject(forKey: aliasesKey)
+        userDefaults.removeObject(forKey: conversationPrimaryAliasesKey)
+        userDefaults.removeObject(forKey: conversationAliasUpdatedAtKey)
+        userDefaults.removeObject(forKey: ourAliasesKey)
+        userDefaults.removeObject(forKey: ourPrimaryAliasesKey)
+        userDefaults.removeObject(forKey: ourAliasUpdatedAtKey)
+        userDefaults.removeObject(forKey: conversationIdsKey)
+        userDefaults.removeObject(forKey: pendingSelfStashKey)
+        userDefaults.removeObject(forKey: declinedContactsKey)
+        userDefaults.removeObject(forKey: routingStatesKey)
+        userDefaults.removeObject(forKey: deterministicMigrationDoneKey)
+        userDefaults.removeObject(forKey: pushReliabilityStateKey)
+        userDefaults.removeObject(forKey: pushConsecutiveMissesKey)
+        userDefaults.removeObject(forKey: pushLastCatchUpSyncAtKey)
+        userDefaults.removeObject(forKey: pushLastReregisterAtKey)
+        userDefaults.removeObject(forKey: hiddenPaymentTxIdsKey)
+        routingStates = [:]
+        if !skipStoreClear {
+            messageStore.clearAll()
+        }
+    }
+
+    /// True while `address` is still the active wallet. An in-flight sync captures the wallet it
+    /// started for and calls this immediately before applying results to the in-memory
+    /// `conversations` list or persisting them; if the user has since switched/imported a different
+    /// account, the sync aborts. This is the write-time backstop that guarantees one account's
+    /// messages can never be stamped into another's store even if a stale sync task outlives the
+    /// switch. See `WalletManager.importWallet`.
+    func isActiveWallet(_ address: String) -> Bool {
+        return WalletManager.shared.currentWallet?.publicAddress == address
+    }
+
+    // MARK: - Public Methods
+
+    /// Start message sync - uses RPC notifications when available, polling as fallback
+    /// Start fallback polling loop when UTXO subscription is unavailable
+    /// Waits 60 seconds after each sync completes before starting next one
+    /// Setup UTXO subscription for real-time payment and message notifications
+    /// Task for subscription retry
+    var subscriptionRetryTask: Task<Void, Never>?
+    /// Consecutive failed subscription retry rounds - drives the capped exponential backoff in
+    /// `scheduleSubscriptionRetry` (1s doubling to a 30s cap, mirroring GRPCStreamConnection's
+    /// auto-reconnect). Reset to 0 whenever the subscription comes up.
+    var subscriptionRetryAttempts = 0
+    var startPollingWhenStoreReadyTask: Task<Void, Never>?
+    var suppressChatListSnapshotPersistence = false
+
+    /// When this process last wrote to the message store (see `recordLocalSave`).
+    var lastLocalSaveAt: Date?
+
+}
+
+
+/// Node connection + ping latency, split out of ChatService so their frequent (~2s) updates
+/// re-render only the connection-detail screen instead of every ChatService observer.
+@MainActor
+final class NodeConnectionInfo: ObservableObject {
+    static let shared = NodeConnectionInfo()
+    @Published var currentConnectedNode: String?
+    @Published var currentNodeLatencyMs: Int?
+    private init() {}
+}

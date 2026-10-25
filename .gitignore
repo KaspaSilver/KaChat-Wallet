@@ -1,0 +1,45 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+# Keep Package.resolved checked in - Xcode Cloud (and any clean clone) needs it
+# to resolve grpc-swift/swift-protobuf/swift-secp256k1 without live network
+# resolution; everything else in xcshareddata/ stays ignored above.
+Frameworks/
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.swp
+*.swo
+*~
+*.bak
+
+# External references (large repos) - except external/opus, which is a real
+# linked build dependency (Opus.xcframework), not just reference material.
+external/*
+!external/opus/
+
+# Claude Code
+.claude/
+
+# Local API keys (see KaChatWallet/Secrets.xcconfig.example)
+KaChatWallet/Secrets.xcconfig
+
+# The local build counter (the "Local Build Number" script phase): per machine, never shared.
+KaChatWallet/.local-build-number
