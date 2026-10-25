@@ -10,7 +10,8 @@ marketplace, Address Book and the whole account Profile (receive, addresses, dom
 
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `b603eb9f`
 (2026-10-24). Most of `KaChatWallet/` is still that code, including features the wallet never
-shows (1:1 and group chats, KaPosts, Public Chats, Chess, Swap, calls, Nextcloud, bots). They are
+shows (1:1 and group chats, KaPosts, Public Chats, Chess, Swap, Nextcloud, bots). Calls are gone
+entirely - call code, VoIP push and the WebRTC package were removed on 2026-10-25. They are
 being removed step by step; until then, change only what the wallet uses.
 
 ## Dock

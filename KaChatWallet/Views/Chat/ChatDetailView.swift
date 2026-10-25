@@ -53,13 +53,6 @@ struct ChatDetailView: View {
 
     @State private var contact: Contact
     @State private var showChatInfo = false
-    /// The call button in the bar, and the "can't call" toast when a start fails.
-    @ObservedObject private var callService = CallService.shared
-    /// The voice-or-video half sheet behind the call button.
-    @State private var showCallOptions = false
-    /// The "Enable calls with this person?" half sheet - what the call button opens while
-    /// calls are still off for this contact (the default).
-    @State private var showEnableCalls = false
     /// Local-only multi-select for deleting individual messages (never the whole conversation -
     /// see `deleteConversation` for that) - toggled from the toolbar's "Select" button.
     @State private var isSelectingMessages = false
@@ -847,18 +840,6 @@ struct ChatDetailView: View {
                     // layout reported on iPhone Pro Max, where the keyboard is tallest and the
                     // misplacement is largest.
                     .scrollDismissesKeyboard(.immediately)
-                    // Why a tapped call notification did not ring (see CallService.chatNotice).
-                    .onChange(of: callService.chatNotice) { notice in
-                        guard let notice else { return }
-                        callService.chatNotice = nil
-                        showToast(notice, style: .error)
-                    }
-                    .onAppear {
-                        if let notice = callService.chatNotice {
-                            callService.chatNotice = nil
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showToast(notice, style: .error) }
-                        }
-                    }
                     .onChange(of: pendingJumpToTxId) { txId in
                         guard let txId else { return }
                         jumpToReplyOriginal(txId: txId, using: proxy)
@@ -982,28 +963,6 @@ struct ChatDetailView: View {
         .toolbar {
             // Trailing, not leading: the left of the bar belongs to Back, and the dot reads as
             // status rather than navigation. Hidden while selecting, where the bar is Cancel/Delete.
-            // The connection dot is gone from inside a chat (the chat list still has it) - the
-            // one thing in the trailing slot is the call button, always there (hidden only while
-            // a call is already up). Calls are off per contact by default, so the first tap asks
-            // "Enable calls with this person?"; once enabled it asks voice or video. A phone
-            // with no Nextcloud of its own asks the contact to host the call, so either side
-            // can start one as long as one of them has Talk.
-            if !isSelectingMessages, callService.session == nil {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        if callService.canCall(contact) {
-                            showCallOptions = true
-                        } else {
-                            showEnableCalls = true
-                        }
-                    } label: {
-                        Image(systemName: "phone.fill")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .accessibilityLabel(Text("Call"))
-                }
-            }
-
             if let activeChessGame, !isSelectingMessages {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -1069,20 +1028,6 @@ struct ChatDetailView: View {
                 displayName: { _ in contactsManager.displayName(for: contact) },
                 avatarURL: { knsService.profileCache[$0]?.avatarURL }
             )
-        }
-        .sheet(isPresented: $showCallOptions) {
-            callOptionsSheet
-                .presentationDetents([.height(250)])
-                .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showEnableCalls, onDismiss: {
-            // Enabled from the sheet: go straight on to voice-or-video, as if the button
-            // had been tapped on an already-enabled contact.
-            if callService.canCall(contact) { showCallOptions = true }
-        }) {
-            enableCallsSheet
-                .presentationDetents([.height(300)])
-                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showChatInfo) {
             ChatInfoView(contact: $contact)
@@ -3618,88 +3563,6 @@ struct ChatDetailView: View {
                 }
             }
         }
-    }
-
-    /// Voice or video - the same half-sheet shape as Address Actions and the other menus.
-    /// The first tap on the call button for a contact: calls are off by default, and enabling
-    /// them is a decision about this person (they can ring you from then on, and use your
-    /// Nextcloud to host a call), so it is asked plainly before anything rings.
-    private var enableCallsSheet: some View {
-        VStack(spacing: 0) {
-            Text("Enable calls and video calls with \(replyDisplayName(for: contact.address))?")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .padding(.top, 20)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
-            Text("They will be able to call you too. You can turn this off any time in User Info.")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-                .padding(.bottom, 16)
-
-            VStack(spacing: 12) {
-                ActionSheetRow(
-                    title: "Enable calls",
-                    subtitle: "Saves this for \(replyDisplayName(for: contact.address)) and lets you call now.",
-                    systemImage: "phone.badge.checkmark"
-                ) {
-                    contact.callsEnabled = true
-                    contactsManager.updateContact(contact)
-                    SharedDataManager.syncCallContactsForIntents()
-                    showEnableCalls = false
-                    CallService.requestMediaPermissions()
-                }
-                ActionSheetRow(
-                    title: "Not now",
-                    subtitle: "Calls stay off for this contact.",
-                    systemImage: "xmark.circle",
-                    tint: .secondary
-                ) {
-                    showEnableCalls = false
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, 20)
-    }
-
-    private var callOptionsSheet: some View {
-        VStack(spacing: 0) {
-            Text("Call \(replyDisplayName(for: contact.address))")
-                .font(.headline)
-                .lineLimit(1)
-                .padding(.top, 20)
-                .padding(.bottom, 16)
-
-            VStack(spacing: 12) {
-                ActionSheetRow(
-                    title: "Voice call",
-                    subtitle: "Rings them in KaChat; your Nextcloud carries the call.",
-                    systemImage: "phone.fill"
-                ) {
-                    showCallOptions = false
-                    callService.startCall(with: contact, video: false)
-                }
-                ActionSheetRow(
-                    title: "Video call",
-                    subtitle: "Same, with your camera on from the start.",
-                    systemImage: "video.fill"
-                ) {
-                    showCallOptions = false
-                    callService.startCall(with: contact, video: true)
-                }
-            }
-            .padding(.horizontal, 20)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, 20)
     }
 
     private func respondToChessInvite(gameId: String, accepted: Bool) {

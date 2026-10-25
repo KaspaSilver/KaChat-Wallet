@@ -3330,12 +3330,7 @@ extension ChatService {
             return
         }
 
-        // Call events (invite / answer / hang-up) ring through the chat itself. They DO stay as
-        // bubbles - the chat shows "Voice call · 4:12" the way a phone's history would - so this
-        // only hands the envelope to CallService and carries on.
-        if !message.isOutgoing, let callEnvelope = CallCodec.parseAny(MessageReplyCodec.unwrappedText(message.content)) {
-            CallService.shared.handleIncoming(callEnvelope, message: message, contactAddress: contactAddress)
-        }
+        // KaChat Wallet has no calls: a call event stays an ordinary bubble and rings nothing.
 
         let contact = contactsManager.getOrCreateContact(address: contactAddress)
         if message.isOutgoing {

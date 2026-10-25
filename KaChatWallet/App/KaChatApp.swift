@@ -1,6 +1,5 @@
 import SwiftUI
 import AVFoundation
-import Intents
 import UserNotifications
 import UIKit
 
@@ -21,9 +20,6 @@ struct KaChatApp: App {
     @State private var isProcessingOutboundShare = false
     @State private var lastActiveResyncAt: Date?
     @State private var hasCompletedFirstActiveTransition = false
-    /// A "call X on KaChat" that arrived (Contacts app, Siri, Recents) before the wallet was
-    /// loaded; placed as soon as it is.
-    @State private var pendingIntentCall: (address: String, video: Bool)?
     @Environment(\.scenePhase) private var scenePhase
 
     /// Below this, becoming active again skips the heavier resync work (node pool reconnect
@@ -48,9 +44,6 @@ struct KaChatApp: App {
         // auto-backup and the launch catch-up — are registered from the very first launch
         // moment, not only after the user first visits a screen that references it.
         _ = NextcloudService.shared
-        // The call screen's own window: from the first moment, so a call rung by a VoIP push
-        // that launched the app shows even before the main screen exists.
-        CallWindowPresenter.shared.start()
         // People shown as their address are asked again for a .kachat name, once a minute.
         KachatNamesRegistry.shared.startUnnamedIdentitySweep()
     }
@@ -84,10 +77,6 @@ struct KaChatApp: App {
                     Task {
                         await processPendingOutboundShareIfNeeded()
                     }
-                    if let pending = pendingIntentCall {
-                        pendingIntentCall = nil
-                        placeIntentCall(address: pending.address, video: pending.video)
-                    }
                 }
                 .onOpenURL { url in
                     handleIncomingURL(url)
@@ -97,11 +86,6 @@ struct KaChatApp: App {
                     if let url = activity.webpageURL {
                         handleIncomingURL(url)
                     }
-                }
-                .onContinueUserActivity(NSStringFromClass(INStartCallIntent.self)) { activity in
-                    // "Call X with KaChat" from the Contacts app, Siri, or Recents - resolved
-                    // by the KaChatIntents extension, placed here.
-                    handleStartCallActivity(activity)
                 }
                 .preferredColorScheme(settingsViewModel.settings.appearance.colorScheme)
                 .onChange(of: settingsViewModel.settings.appearance) { _ in
@@ -156,33 +140,6 @@ struct KaChatApp: App {
         }
     }
 
-    /// The Intents extension resolved whom to call and handed over; the activity carries the
-    /// KaChat address and whether video was asked for.
-    private func handleStartCallActivity(_ activity: NSUserActivity) {
-        let info = activity.userInfo ?? [:]
-        let intent = activity.interaction?.intent as? INStartCallIntent
-        let person = intent?.contacts?.first
-        let video = (info["video"] as? Bool) ?? (intent?.callCapability == .videoCall)
-        let address = (info["address"] as? String) ?? person?.customIdentifier ?? person?.personHandle?.value
-        guard let address else { return }
-        if walletManager.currentWallet == nil {
-            pendingIntentCall = (address, video)
-            return
-        }
-        placeIntentCall(address: address, video: video)
-    }
-
-    private func placeIntentCall(address: String, video: Bool) {
-        guard let contact = contactsManager.getContact(byAddress: address) else { return }
-        if contact.callsEnabled == true {
-            CallService.shared.startCall(with: contact, video: video)
-        } else {
-            // Calls are not yet allowed with this person: land in the chat, where the call
-            // button asks to enable them.
-            chatService.pendingChatNavigation = contact.address
-            NotificationCenter.default.post(name: .openChat, object: nil, userInfo: ["contactAddress": contact.address])
-        }
-    }
 
     private func handleScenePhaseChange(to newPhase: ScenePhase) {
         // Covered the moment the app stops being the thing in front (the switcher, a system
@@ -564,10 +521,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // Register background task handler
         BackgroundTaskManager.shared.registerBackgroundTasks()
 
-        // VoIP pushes (a closed app ringing) must be registered for at launch: a push that
-        // launches the app is delivered to this registration.
-        VoIPPushManager.shared.start()
-
         // The notification extension's copy of the notification switches is refreshed on every
         // launch, so an app update can never leave it stale or missing.
         SharedDataManager.syncNotificationSettingsForExtension()
@@ -898,12 +851,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             _ = await PushNotificationManager.shared.handleRemoteNotification(
                 response.notification.request.content.userInfo
             )
-        }
-        // A tapped "Incoming call" alert: ring it now if the call is still live, or tell the
-        // chat why not. A no-op for every push that is not an opening call message.
-        let tappedUserInfo = response.notification.request.content.userInfo
-        Task { @MainActor in
-            CallService.shared.handleCallNotificationTap(tappedUserInfo)
         }
         // The threadIdentifier contains the contact address, "public chat:<channel>" for a
         // public chat room notification (see `PublicChatService.notifyIfEnabled`), or

@@ -32,7 +32,7 @@ struct ChatInfoView: View {
     @State private var activeSheet: InfoSheet?
 
     private enum InfoSheet: String, Identifiable {
-        case address, domains, kachatNames, aliases, addressBook, notifications, photos, calls, info
+        case address, domains, kachatNames, aliases, addressBook, notifications, photos, info
         var id: String { rawValue }
     }
     @State private var photoAutoDisplayOverride: PhotoAutoDisplayMode? = nil
@@ -399,11 +399,6 @@ struct ChatInfoView: View {
                         ) { activeSheet = .photos }
 
                         infoCard(
-                            "Calls",
-                            systemImage: contact.callsEnabled == true ? "phone" : "phone.down"
-                        ) { activeSheet = .calls }
-
-                        infoCard(
                             "Info",
                             systemImage: "info.circle"
                         ) { activeSheet = .info }
@@ -435,7 +430,6 @@ struct ChatInfoView: View {
                     .presentationDragIndicator(.visible)
                 case .notifications: notificationsSheet
                 case .photos: photosSheet
-                case .calls: callsSheet
                 case .info: infoSheet
                 }
             }
@@ -701,33 +695,6 @@ struct ChatInfoView: View {
                 }
             }
             .navigationTitle("Photos")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-
-    /// Whether this person can ring you. Off means their call invites are ignored on this
-    /// device (they get no answer, not a decline) and the call button disappears on your side
-    /// too. Per contact, this device only.
-    private var callsSheet: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("Allow calls and video calls", isOn: Binding(
-                        get: { contact.callsEnabled == true },
-                        set: { allowed in
-                            contact.callsEnabled = allowed ? true : nil
-                            contactsManager.updateContact(contact)
-                            SharedDataManager.syncCallContactsForIntents()
-                            if allowed { CallService.requestMediaPermissions() }
-                        }
-                    ))
-                } footer: {
-                    Text("Off for everyone until you turn it on. While off, this contact cannot ring you or ask your Nextcloud to host a call. Calls run through Nextcloud Talk and stay inside KaChat - only one of you needs a Nextcloud.")
-                }
-            }
-            .navigationTitle("Calls")
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
