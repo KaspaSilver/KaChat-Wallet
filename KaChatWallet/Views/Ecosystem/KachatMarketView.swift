@@ -25,6 +25,43 @@ enum KachatTabIcon {
         return template
     }
 
+    /// KaChat Wallet's dock icon for .kachat: a name tag with an "@" cut out of it, filled like
+    /// the SF Symbols beside it. A template image `side` points square.
+    static func domainsImage(side: CGFloat) -> UIImage {
+        let key = "domains-\(Int(side.rounded()))"
+        if let cached = cache[key] { return cached }
+        let u = side / 24
+        let mid = 12 * u
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { context in
+            let ctx = context.cgContext
+            // Tag: a rounded body on the right, a point on the left.
+            let top = 3.5 * u, bottom = 20.5 * u, left = 0.5 * u, shoulder = 7 * u, right = 23.5 * u, r = 3.5 * u
+            let tag = CGMutablePath()
+            tag.move(to: CGPoint(x: left, y: mid))
+            tag.addLine(to: CGPoint(x: shoulder, y: top))
+            tag.addLine(to: CGPoint(x: right - r, y: top))
+            tag.addArc(tangent1End: CGPoint(x: right, y: top), tangent2End: CGPoint(x: right, y: top + r), radius: r)
+            tag.addLine(to: CGPoint(x: right, y: bottom - r))
+            tag.addArc(tangent1End: CGPoint(x: right, y: bottom), tangent2End: CGPoint(x: right - r, y: bottom), radius: r)
+            tag.addLine(to: CGPoint(x: shoulder, y: bottom))
+            tag.closeSubpath()
+            ctx.setFillColor(UIColor.black.cgColor)
+            ctx.addPath(tag)
+            ctx.fillPath()
+            // The hole it hangs by, and the "@", both cut out of the body.
+            ctx.setBlendMode(.clear)
+            ctx.fillEllipse(in: CGRect(x: 4.4 * u, y: mid - 1.5 * u, width: 3 * u, height: 3 * u))
+            let font = UIFont.systemFont(ofSize: 14 * u, weight: .heavy)
+            let rounded = font.fontDescriptor.withDesign(.rounded).map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
+            let at = NSAttributedString(string: "@", attributes: [.font: rounded, .foregroundColor: UIColor.black])
+            let size = at.size()
+            at.draw(at: CGPoint(x: 15.5 * u - size.width / 2, y: mid - size.height / 2))
+        }
+        let template = rendered.withRenderingMode(.alwaysTemplate)
+        cache[key] = template
+        return template
+    }
+
     static func view(side: CGFloat) -> some View {
         Image(uiImage: image(side: side))
             .renderingMode(.template)
