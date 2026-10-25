@@ -141,6 +141,8 @@ extension ChatService {
     // history took. Coalesces concurrent callers within `messageStoreReloadMinInterval` onto the
     // same pending Task instead of each doing its own separate reload.
     func loadMessagesFromStoreIfNeeded(onlyIfEmpty: Bool = true) async {
+        // KaChat Wallet: no chats to load, and no "chat with yourself" to create.
+        guard Self.chatsEnabled else { return }
         // Whatever the store held - nothing at all for a brand-new account - your chat with
         // yourself is there once messages load.
         defer { ensureSelfConversation() }

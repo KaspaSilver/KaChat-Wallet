@@ -444,6 +444,7 @@ extension ChatService {
         catchUpSyncInFlight = true
         defer { catchUpSyncInFlight = false }
 
+        guard Self.chatsEnabled else { return }
         AppLog.log("[ChatService] Running catch-up sync (%@), pushState=%@ force=%@",
               trigger.rawValue, pushReliabilityState.rawValue, force ? "true" : "false")
         await fetchNewMessages()
@@ -461,6 +462,11 @@ extension ChatService {
         // calls back in here once the user is through.
         guard !onboardingSyncHeld else {
             AppLog.log("%@", "[ChatService] startPolling deferred: onboarding in progress")
+            return
+        }
+        // KaChat Wallet: no message sync, only the wallet's own live subscription.
+        guard Self.chatsEnabled else {
+            startWalletSync()
             return
         }
         guard isMessageStoreReadyForCurrentWallet() else {
@@ -576,6 +582,29 @@ extension ChatService {
         }
     }
 
+    /// KaChat Wallet's whole sync: subscribe to the wallet's own addresses for live balance and
+    /// "Received KAS", with a slow balance poll as the fallback when the node can't stream.
+    /// Safe to call again (app return): it only resubscribes when the subscription is down.
+    private func startWalletSync() {
+        if hasCompletedInitialSync {
+            if !isUtxoSubscribed {
+                Task { await self.setupUtxoSubscription() }
+                if pollTask == nil { startFallbackPolling() }
+            }
+            return
+        }
+        if let task = initialSyncTask, !task.isCancelled { return }
+        AppLog.log("%@", "[ChatService] Starting wallet sync (chats off)")
+        initialSyncTask = Task {
+            setInitialSyncPhase(.subscribing)
+            await setupUtxoSubscription()
+            suppressNotificationsUntilSynced = false
+            hasCompletedInitialSync = true
+            setInitialSyncPhase(.finished)
+            if !isUtxoSubscribed { startFallbackPolling() }
+        }
+    }
+
     private func isMessageStoreReadyForCurrentWallet() -> Bool {
         guard let walletAddress = WalletManager.shared.currentWallet?.publicAddress else { return false }
         return messageStore.isStoreLoaded && messageStore.currentWalletAddress == walletAddress
@@ -607,7 +636,13 @@ extension ChatService {
                 // tick after returning to the foreground syncs promptly; it just does no
                 // network work while the app is not active (same gate as the open-chat poll).
                 guard UIApplication.shared.applicationState == .active else { continue }
-                await self.fetchNewMessages()
+                if Self.chatsEnabled {
+                    await self.fetchNewMessages()
+                } else {
+                    // KaChat Wallet: no messages - the balance and any receive while unsubscribed.
+                    _ = try? await WalletManager.shared.refreshBalance(force: true)
+                    await AddressActivityNotifier.shared.runCatchUpIfNeeded()
+                }
             }
         }
     }
@@ -640,7 +675,8 @@ extension ChatService {
             var addressesToSubscribe = Set<String>()
             addressesToSubscribe.insert(wallet.publicAddress)
 
-            let contacts = await MainActor.run { contactsManager.activeContacts }
+            // KaChat Wallet: no chat contacts - only the wallet's own addresses.
+            let contacts = Self.chatsEnabled ? await MainActor.run { contactsManager.activeContacts } : []
             let contactCount = contacts.count
             for contact in contacts {
                 addressesToSubscribe.insert(contact.address)
@@ -703,8 +739,10 @@ extension ChatService {
             AppLog.log("[ChatService] Real-time notifications active for %d addresses", addressList.count)
             scheduleBalanceRefreshAfterSubscriptionEnabled()
 
-            // If this is a restart, sync messages/payments to catch anything missed during downtime
-            if isRestart {
+            // If this is a restart, sync messages/payments to catch anything missed during downtime.
+            // KaChat Wallet has none; AddressActivityNotifier catches up its receives on
+            // .rpcSubscriptionsRestored by itself.
+            if isRestart && Self.chatsEnabled {
                 AppLog.log("[ChatService] Subscription restarted - evaluating catch-up sync policy")
                 Task {
                     await self.maybeRunCatchUpSync(trigger: .subscriptionRestart)
@@ -809,6 +847,7 @@ extension ChatService {
     /// Only the payments since `paymentCatchUpSince` - for a foreground whose full catch-up is
     /// debounced. A payment from an unknown address lands in the self-chat as usual.
     func fetchMissedPaymentsIfNeeded() async {
+        guard Self.chatsEnabled else { return }
         guard let since = paymentCatchUpSince, !paymentCatchUpInFlight,
               let wallet = WalletManager.shared.currentWallet else { return }
         paymentCatchUpInFlight = true
@@ -848,7 +887,7 @@ extension ChatService {
     }
 
     func addContactToUtxoSubscription(_ contactAddress: String) async {
-        guard isUtxoSubscribed else { return }
+        guard Self.chatsEnabled, isUtxoSubscribed else { return }
         guard let wallet = WalletManager.shared.currentWallet else { return }
 
         // Rebuild subscription with all active addresses including the new one (and, as in
@@ -906,7 +945,7 @@ extension ChatService {
         // and thrash resubscription.
         var addressesToSubscribe = Set<String>()
         addressesToSubscribe.insert(wallet.publicAddress)
-        for contact in activeContacts {
+        for contact in activeContacts where Self.chatsEnabled {
             addressesToSubscribe.insert(contact.address)
         }
         for ownAddress in AddressActivityNotifier.shared.watchedOwnAddresses() {

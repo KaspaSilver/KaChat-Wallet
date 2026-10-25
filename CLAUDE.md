@@ -68,6 +68,19 @@ xcodebuild -project KaChatWallet.xcodeproj -scheme KaChatWallet -destination 'pl
 Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
 owner's.
 
+## Chats are off
+
+`ChatService.chatsEnabled` is `false`. ChatService stays only for the node connection and the
+live subscription to the wallet's own addresses (main, spending, cold storage): incoming UTXO
+batches go to `AddressActivityNotifier` ("Received KAS") and a balance refresh, nothing else.
+Every chat path checks the flag and does nothing - handshakes, message sync and fallback
+polling, payments-as-chat, contact sweeps, catch-ups, group live polling and catch-up, KaPosts
+notifications, the unnamed-contact .kachat sweep, the local message load (and its "chat with
+yourself"), extension contact/group syncs, and background fetch (which refreshes the balance
+and catches up receives instead). The icon never shows a badge. Notifications are only for the
+wallet's own addresses, Cold Storage and .kachat names. The chat code itself still compiles;
+change nothing in it unless removing it.
+
 ## Push
 
 The wallet registers with KaChat's push service for "Received KAS" (its own addresses as

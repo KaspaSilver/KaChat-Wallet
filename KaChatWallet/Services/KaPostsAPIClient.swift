@@ -1272,6 +1272,8 @@ final class KaPostsNotificationService {
     }
 
     func start() {
+        // KaChat Wallet has no KaPosts: never poll for KaPosts notifications.
+        guard ChatService.chatsEnabled else { return }
         // No KaPost indexer on this network (testnet): nothing to poll.
         guard KaPostsAPIClient.hasIndexer else { return }
         guard pollTask == nil else { return }

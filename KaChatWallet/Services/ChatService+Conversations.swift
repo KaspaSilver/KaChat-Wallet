@@ -247,6 +247,7 @@ extension ChatService {
     /// Restart the open-chat poll after `stopActiveChatPollForBackground()` if a conversation is
     /// still open. No-op when no chat is open or the poll is already running.
     func resumeActiveChatPollIfNeeded() {
+        guard Self.chatsEnabled else { return }
         guard let address = activeConversationAddress else { return }
         if let task = activeChatPollTask, !task.isCancelled { return }
         startActiveChatPoll(for: address)
@@ -269,6 +270,7 @@ extension ChatService {
     /// Idempotent with every other fetch path: `fetchContextualMessagesFromContact` skips txIds
     /// already in the store and `addMessageToConversation` re-checks by txId at insert.
     func startForegroundContactSweep() {
+        guard Self.chatsEnabled else { return }
         if let task = foregroundSweepTask, !task.isCancelled { return }
         guard WalletManager.shared.currentWallet != nil else { return }
         AppLog.log("[ChatService] Foreground contact sweep started (%.0fs, cap %d)",
@@ -490,6 +492,7 @@ extension ChatService {
     /// Fetch only handshakes (lightweight, needed to establish encryption keys)
     /// NOTE: Assumes configureAPIIfNeeded() was already called by startup flow
     func fetchHandshakesOnly() async {
+        guard Self.chatsEnabled else { return }
         guard let wallet = WalletManager.shared.currentWallet else {
             AppLog.log("[ChatService] fetchHandshakesOnly: No wallet")
             return
@@ -581,6 +584,7 @@ extension ChatService {
     }
 
     func fetchNewMessages(forActiveOnly activeAddress: String? = nil) async {
+        guard Self.chatsEnabled else { return }
         guard let wallet = WalletManager.shared.currentWallet else {
             AppLog.log("%@", "[ChatService] Skipping fetch - no wallet")
             return

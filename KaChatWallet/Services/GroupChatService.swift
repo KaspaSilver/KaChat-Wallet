@@ -98,7 +98,7 @@ final class GroupChatService: ObservableObject {
     private static let livePollStartLookbackMs: UInt64 = 2 * 60 * 1000
 
     func startLivePolling() {
-        guard livePollTask == nil, hasActiveWallet else { return }
+        guard ChatService.chatsEnabled, livePollTask == nil, hasActiveWallet else { return }
         livePollTask = Task { @MainActor [weak self] in
             var lastFullPass = Date.distantPast
             while !Task.isCancelled {
@@ -2726,7 +2726,7 @@ final class GroupChatService: ObservableObject {
     ///    without needing to already know the admin. This replaced the indexer's old
     ///    fan-out-to-every-device push fallback for that same case.
     func performCatchUpSync() async {
-        guard hasActiveWallet else { return }
+        guard ChatService.chatsEnabled, hasActiveWallet else { return }
         guard let wallet = WalletManager.shared.currentWallet else { return }
 
         // Backfill recovery invites for any admin group that lacks one for its current epoch —

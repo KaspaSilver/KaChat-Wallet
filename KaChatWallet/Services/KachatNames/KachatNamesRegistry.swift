@@ -728,6 +728,8 @@ final class KachatNamesRegistry: ObservableObject {
     /// new transactions (`revision`), since a name only appears through one (IOS-087). Started
     /// once, at launch.
     func startUnnamedIdentitySweep() {
+        // It names chat contacts; KaChat Wallet has none.
+        guard ChatService.chatsEnabled else { return }
         guard !unnamedSweepStarted else { return }
         unnamedSweepStarted = true
         Task { @MainActor [weak self] in

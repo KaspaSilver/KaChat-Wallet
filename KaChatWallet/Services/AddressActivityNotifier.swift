@@ -304,7 +304,8 @@ final class AddressActivityNotifier: ObservableObject {
         }
         // The chatting address notifies only for a plain transfer we could read: a chat payment
         // or a handshake (a payload) is the chat's news, and an unreadable one stays quiet.
-        if fullTx.map({ !Self.isPlainTransfer($0) }) ?? true {
+        // KaChat Wallet has no chats: its main address is a wallet address like the rest.
+        if ChatService.chatsEnabled, fullTx.map({ !Self.isPlainTransfer($0) }) ?? true {
             hits.removeAll { $0.address == walletAddress }
         }
         guard !hits.isEmpty else {
@@ -339,7 +340,8 @@ final class AddressActivityNotifier: ObservableObject {
         walletAddress: String
     ) async {
         let ownAll = ownInputAddressSet(walletAddress: walletAddress)
-        let isChatting = address == walletAddress
+        // KaChat Wallet has no chats: its main address is a wallet address like the rest.
+        let isChatting = ChatService.chatsEnabled && address == walletAddress
         let recentTxs = await ChatService.shared.fetchFullTransactionsPaginated(
             for: address,
             pageSize: 10,

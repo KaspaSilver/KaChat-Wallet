@@ -274,6 +274,11 @@ struct KaChatApp: App {
             Task {
                 await GroupChatService.shared.performCatchUpSync()
             }
+            // KaChat Wallet: bring the live subscription to the wallet's own addresses back if
+            // it dropped while away (no-op while it is up).
+            if !ChatService.chatsEnabled {
+                ChatService.shared.startPolling()
+            }
             if settingsViewModel.settings.notificationMode == .remotePush {
                 Task {
                     await ChatService.shared.resumeUtxoSubscriptionForRemotePush()

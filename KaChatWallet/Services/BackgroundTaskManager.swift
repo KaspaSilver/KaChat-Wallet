@@ -75,7 +75,14 @@ final class BackgroundTaskManager {
                 return true
             }
 
-            await ChatService.shared.fetchNewMessages()
+            if ChatService.chatsEnabled {
+                await ChatService.shared.fetchNewMessages()
+            } else {
+                // KaChat Wallet: no messages - refresh the balance and notify any receive to the
+                // wallet's own addresses that landed while it was closed.
+                _ = try? await WalletManager.shared.refreshBalance(force: true)
+                await AddressActivityNotifier.shared.runCatchUpIfNeeded()
+            }
             guard !Task.isCancelled else { return false }
             AppLog.log("%@", "[BackgroundTaskManager] Background fetch completed successfully")
             return true

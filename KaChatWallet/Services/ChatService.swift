@@ -38,6 +38,12 @@ enum CatchUpSyncTrigger: String {
 final class ChatService: ObservableObject {
     static let shared = ChatService()
 
+    /// KaChat Wallet: chats are off. ChatService keeps only the node connection and the live
+    /// subscription to the wallet's own addresses (balance, "Received KAS"); every chat path -
+    /// handshakes, messages, payments-as-chat, groups, contact sweeps, catch-ups, background
+    /// message fetches - checks this and does nothing.
+    nonisolated static let chatsEnabled = false
+
     @Published var conversations: [Conversation] = [] {
         didSet {
             scheduleBadgeUpdate()

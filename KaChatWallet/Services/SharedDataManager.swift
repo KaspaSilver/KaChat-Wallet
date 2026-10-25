@@ -82,6 +82,8 @@ final class SharedDataManager {
     /// Sync contacts from ContactsManager to shared container for notification extension
     @MainActor
     static func syncContactsForExtension() {
+        // KaChat Wallet has no chat contacts and no share/notification extension to feed.
+        guard ChatService.chatsEnabled else { return }
         let contacts = ContactsManager.shared.contacts.map { contact in
             SharedContact(
                 address: contact.address,
@@ -119,6 +121,7 @@ final class SharedDataManager {
     /// The callable contacts, for the Intents extension. Refreshed with the contact list.
     @MainActor
     static func syncCallContactsForIntents() {
+        guard ChatService.chatsEnabled else { return }
         let callable: [[String: String]] = ContactsManager.shared.contacts.compactMap { contact in
             guard contact.callsEnabled == true else { return nil }
             return [
@@ -186,6 +189,7 @@ final class SharedDataManager {
     /// straight from `GroupBag` via the Keychain access group both targets already share.
     @MainActor
     static func syncGroupsForExtension() {
+        guard ChatService.chatsEnabled else { return }
         let groups = GroupChatService.shared.groups.map { group in
             SharedGroup(
                 groupId: group.id,
