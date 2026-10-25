@@ -60,15 +60,11 @@ struct SettingsView: View {
                 settingsCategoryRow("Notifications", icon: "bell.badge", tint: .accentColor) {
                     NotificationsHubPage()
                 }
-                settingsCategoryRow("Chats", icon: "bubble.left.and.bubble.right", tint: .accentColor) {
-                    chatsPage
-                }
+                // No Chats page: KaChat Wallet has no chats.
                 settingsCategoryRow("Storage", icon: "internaldrive", tint: .accentColor) {
                     storagePage
                 }
-                settingsCategoryRow("Chat History", icon: "clock.arrow.circlepath", tint: .accentColor) {
-                    chatHistoryPage
-                }
+                // No Chat History page (export/import of chats): KaChat Wallet has no chats.
                 settingsCategoryRow("Diagnostics", icon: "stethoscope", tint: .accentColor) {
                     diagnosticsPage
                 }
@@ -219,36 +215,6 @@ struct SettingsView: View {
         ConnectionHubPage()
     }
 
-    private var chatsPage: some View {
-        Form {
-            Section("Chats") {
-                    Toggle("Require approval for photos from new contacts", isOn: $settingsViewModel.settings.requirePhotoApprovalForNewContacts)
-                        .onChange(of: settingsViewModel.settings.requirePhotoApprovalForNewContacts) { _ in
-                            settingsViewModel.saveSettings()
-                        }
-
-                    Toggle("Higher quality photos", isOn: $settingsViewModel.settings.higherQualityPhotos)
-                        .onChange(of: settingsViewModel.settings.higherQualityPhotos) { _ in
-                            settingsViewModel.saveSettings()
-                        }
-
-                    NavigationLink {
-                        QuickReactionEmojisSettingsView(settingsViewModel: settingsViewModel)
-                    } label: {
-                        HStack {
-                            Label("Quick Reactions", systemImage: "face.smiling")
-                            Spacer()
-                            Text(settingsViewModel.settings.effectiveQuickReactionEmojis.joined())
-                                .font(.caption)
-                        }
-                    }
-                }
-
-        }
-        .navigationTitle("Chats")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
     /// Storage hub: a category list like the main Settings screen — each provider row leads
     /// into its own screen.
     private var storagePage: some View {
@@ -349,42 +315,6 @@ struct SettingsView: View {
         NextcloudSettingsView()
             .navigationTitle("Nextcloud")
             .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private var chatHistoryPage: some View {
-        Form {
-            Section("Chat History") {
-                    Button {
-                        Task {
-                            await exportChatHistoryArchive()
-                        }
-                    } label: {
-                        HStack {
-                            Label("Export Chat History", systemImage: "square.and.arrow.up")
-                            Spacer()
-                            if isPreparingChatHistoryExport {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isPreparingChatHistoryExport || restoreCoordinator.isRunning)
-
-                    Button {
-                        showChatHistoryImporter = true
-                    } label: {
-                        HStack {
-                            Label("Import Chat History", systemImage: "square.and.arrow.down")
-                            Spacer()
-                            if restoreCoordinator.isRunning {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isPreparingChatHistoryExport || restoreCoordinator.isRunning)
-                }
-        }
-        .navigationTitle("Chat History")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var diagnosticsPage: some View {

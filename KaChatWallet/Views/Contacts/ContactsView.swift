@@ -584,7 +584,6 @@ struct ProfileView: View {
     private var helpSection: some View {
         NavigationLink {
             ProfileHelpView(
-                onWelcomeGuide: { showWelcomeGuideReplay = true },
                 onKNSSetupGuide: { showKachatSetupGuide = true }
             )
         } label: {
@@ -5237,25 +5236,15 @@ private enum ProfileQRCodeCache {
 
 // MARK: - Profile Help screen
 
-/// All the app's guides in one place, reached from Profile > Help: the first-run Welcome
-/// Guide, the KNS profile setup wizard, and the 4.0 dock walkthrough (Chats-tab cycling).
-/// Welcome/KNS replay through ProfileView's own covers (callbacks); the dock guide presents
-/// right here.
+/// The app's guides, reached from Profile > Help. KaChat Wallet keeps only the .kachat names
+/// guide; KaChat's Welcome Guide walks through chats, which the wallet doesn't have.
 struct ProfileHelpView: View {
-    let onWelcomeGuide: () -> Void
     let onKNSSetupGuide: () -> Void
 
 
     var body: some View {
         List {
             Section {
-                helpRow(
-                    icon: "sparkles",
-                    title: "Welcome Guide",
-                    subtitle: "The full first-run tour: wallet, chats, payments and more."
-                ) {
-                    onWelcomeGuide()
-                }
                 helpRow(
                     icon: "person.text.rectangle",
                     title: ".kachat Names Guide",

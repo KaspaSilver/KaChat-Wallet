@@ -43,7 +43,7 @@ struct OnboardingView: View {
                 // An overlay inside the buttons' own 40pt bottom padding, so the height budget
                 // that keeps Create and Import on screen is untouched.
                 .overlay(alignment: .bottom) {
-                    Text(verbatim: "KaChat \(AppVersion.display)")
+                    Text(verbatim: "KaChat Wallet \(AppVersion.display)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .padding(.bottom, 10)
@@ -146,25 +146,17 @@ struct OnboardingView: View {
 
     private var hasSavedAccounts: Bool { !walletManager.savedAccounts.isEmpty }
 
-    /// Wordmark with the app mark beside it, matching Android. The tagline stays whether or not
-    /// there are accounts saved: it is what the screen is, and hiding it on a returning device
-    /// left the wordmark sitting on its own with nothing saying what it belongs to.
+    /// Wordmark with the app mark beside it. KaChat Wallet's name says what it is, so there is no
+    /// tagline under it (owner's call, 2026-10-24).
     private var titleSection: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Text("KaChat")
-                    .font(.largeTitle.weight(.bold))
-                Image("KaChatLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 40, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            }
-
-            Text("Secure messaging on Kaspa BlockDAG")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+        HStack(spacing: 10) {
+            Text(verbatim: "KaChat Wallet")
+                .font(.largeTitle.weight(.bold))
+            Image("KaChatWalletLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
     }
 

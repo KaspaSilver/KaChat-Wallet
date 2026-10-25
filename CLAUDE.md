@@ -25,8 +25,19 @@ Four fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 | Address Book | `AddressBookView` (`Views/Contacts/AddressBookView.swift`) |
 | Profile | `ProfileView` (`Views/Contacts/ContactsView.swift`); Settings opens from here |
 
-Account setup is KaChat's, unchanged: `ContentView` -> `OnboardingView` (create / import a seed)
--> `MainTabView`.
+Account setup is KaChat's: `ContentView` -> `OnboardingView` (create / import a seed) ->
+`MainTabView`. The sign-in screen says "KaChat Wallet" with the wallet logo and no tagline; KaChat's
+welcome guide is not shown.
+
+Profile keeps KaChat's whole profile (Receive, Chatting Address, Edit KaChat Profile, Your
+Domains, share link) minus the chat-only parts: Settings has no Chats or Chat History page, and
+Help has only the .kachat names guide. The bell lists wallet and .kachat notifications only.
+
+## Logo
+
+`tools/make_logo.py` draws the logo (white rounded square, teal wallet, Kaspa's backward K in the
+middle): `python3 tools/make_logo.py KaChatWallet/Resources/Assets.xcassets/KaChatWalletLogo.imageset/KaChatWalletLogo.png 512`.
+The app icon is still KaChat's.
 
 ## Identifiers
 
