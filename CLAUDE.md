@@ -35,9 +35,14 @@ Help has only the .kachat names guide. The bell lists wallet and .kachat notific
 
 ## Logo
 
-`tools/make_logo.py` draws the logo (white rounded square, teal wallet, Kaspa's backward K in the
-middle): `python3 tools/make_logo.py KaChatWallet/Resources/Assets.xcassets/KaChatWalletLogo.imageset/KaChatWalletLogo.png 512`.
-The app icon is still KaChat's.
+`tools/make_logo.py` draws the logo and the app icons (teal wallet, Kaspa's backward K in the
+middle). Variants: `logo` (white rounded square, the in-app `KaChatWalletLogo` image, 512 px) and
+the 1024 px app icons `light` (white), `dark` (near-black) and `tinted` (grayscale on black):
+
+```bash
+python3 tools/make_logo.py KaChatWallet/Resources/Assets.xcassets/KaChatWalletLogo.imageset/KaChatWalletLogo.png 512 logo
+for v in light dark tinted; do python3 tools/make_logo.py KaChatWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-$v.png 1024 $v; done
+```
 
 ## Identifiers
 
