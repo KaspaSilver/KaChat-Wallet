@@ -700,6 +700,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             let activeAddress = ChatService.shared.activeConversationAddress
             let threadId = notification.request.content.threadIdentifier
             let settings = AppSettings.load()
+            // KaChat Wallet: the push service's "Received" push (thread "funds:<address>") gets
+            // no banner while the app is open - the app's own Address Activity notification
+            // already announces that receive, and both would show.
+            if threadId.hasPrefix("funds:") {
+                completionHandler([])
+                return
+            }
             // Simple Mode: never display KaPosts/public chat notifications. Registration already
             // drops the public chat channels + KaPosts pubkey (see PushNotificationManager), but a
             // push can still race the re-registration - suppress it client-side too.
@@ -965,6 +972,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // (Portfolio, or Profile when Portfolio is hidden - MainTabView picks), which is where
         // the balance that just moved is shown. `PendingTabRoute` covers the cold start, where
         // the post below has no observer yet.
+        // KaChat Wallet: the push service's "Received" push carries only its thread id,
+        // "funds:<address>" - open that address's history, as the local notification does.
+        if threadIdentifier.hasPrefix("funds:") {
+            let address = String(threadIdentifier.dropFirst("funds:".count))
+            if !address.isEmpty {
+                OwnAddressRoute.pending = address
+                NotificationCenter.default.post(name: .openOwnAddress, object: nil)
+            } else {
+                PendingTabRoute.pending = .portfolio
+                NotificationCenter.default.post(name: .openPortfolio, object: nil)
+            }
+            completionHandler()
+            return
+        }
+
         if threadIdentifier == AddressActivityNotifier.notificationThreadIdentifier {
             let kind = response.notification.request.content.userInfo["kind"] as? String
             if let address = response.notification.request.content.userInfo["address"] as? String, !address.isEmpty {

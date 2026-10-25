@@ -67,6 +67,14 @@ xcodebuild -project KaChatWallet.xcodeproj -scheme KaChatWallet -destination 'pl
 Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
 owner's.
 
+## Push
+
+The wallet registers with KaChat's push service for "Received KAS" (its own addresses as
+`watch_only_addresses`) and .kachat name events (`primary_address`), with `apns_topic` =
+`com.kachat.wallet` - no chats, rooms or KaPosts. It asks for notification permission once, when
+its tabs first show. Entitlements carry `aps-environment` (development / production). The service
+still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_SERVICE.md`.
+
 ## Protocol and servers
 
 Same as KaChat: the node pool for balances and transactions, the Kaspa REST API and CoinGecko for

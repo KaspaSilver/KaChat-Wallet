@@ -217,7 +217,7 @@ final class PushNotificationManager: ObservableObject {
         }
 
         let watchedAddresses = collectWatchedAddresses()
-        guard !watchedAddresses.isEmpty else { return }
+        guard !watchedAddresses.isEmpty || !collectWatchOnlyAddresses().isEmpty else { return }
 
         Task {
             do {
@@ -421,10 +421,12 @@ final class PushNotificationManager: ObservableObject {
         let watchedGroupIds = collectWatchedGroupIds() ?? []
         let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
         let primaryAddress = collectPrimaryAddress()
+        let watchOnlyAddresses = collectWatchOnlyAddresses()
 
         // Group ids alone are a valid registration - requiring a non-empty 1:1 list meant a user
         // with groups but no push-eligible 1:1 chats never registered for group pushes at all.
-        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty else {
+        // KaChat Wallet has neither: its own addresses (watch-only) are its registration.
+        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty || !watchOnlyAddresses.isEmpty else {
             throw PushError.noWatchedAddresses
         }
 
@@ -435,7 +437,8 @@ final class PushNotificationManager: ObservableObject {
                 watchedAddresses: watchedAddresses,
                 watchedGroupIds: watchedGroupIds,
                 aliases: aliases,
-                primaryAddress: primaryAddress
+                primaryAddress: primaryAddress,
+                watchOnlyAddresses: watchOnlyAddresses
             )
             if statusCode == 200 {
                 applySuccessfulRegistration(
@@ -469,7 +472,8 @@ final class PushNotificationManager: ObservableObject {
         watchedAddresses: [String],
         watchedGroupIds: [String],
         aliases: [String],
-        primaryAddress: String?
+        primaryAddress: String?,
+        watchOnlyAddresses: [String]
     ) async throws -> (Int, String?) {
         guard let url = URL(string: "\(settings.pushIndexerURL)\(registrationEndpoint)") else {
             AppLog.log("[Push] Invalid push service URL: %@", settings.pushIndexerURL)
@@ -510,6 +514,8 @@ final class PushNotificationManager: ObservableObject {
             aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
             voipToken: voipToken,
+            watchOnlyAddresses: watchOnlyAddresses,
+            apnsTopic: Self.apnsTopic,
             auth: auth
         )
 
@@ -657,7 +663,7 @@ final class PushNotificationManager: ObservableObject {
 
         if !isRegistered {
             let watchedAddresses = collectWatchedAddresses()
-            guard !watchedAddresses.isEmpty else { return }
+            guard !watchedAddresses.isEmpty || !collectWatchOnlyAddresses().isEmpty else { return }
             if shouldDeferRegistrationForWalletBindingConflict() {
                 return
             }
@@ -744,10 +750,11 @@ final class PushNotificationManager: ObservableObject {
         }
         let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
         let primaryAddress = collectPrimaryAddress()
+        let watchOnlyAddresses = collectWatchOnlyAddresses()
         // Only unregister when there is NOTHING left to watch. Group ids alone are a valid
         // registration - unregistering whenever the 1:1 list was empty killed ALL group pushes for
-        // users with groups but no push-eligible 1:1 chats.
-        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty {
+        // users with groups but no push-eligible 1:1 chats. So are KaChat Wallet's own addresses.
+        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty && watchOnlyAddresses.isEmpty {
             AppLog.log("[Push] No eligible chats for push, unregistering device from indexer")
             await unregister()
             lastWatchedSignature = ""
@@ -802,6 +809,8 @@ final class PushNotificationManager: ObservableObject {
             aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
             voipToken: voipToken,
+            watchOnlyAddresses: watchOnlyAddresses,
+            apnsTopic: Self.apnsTopic,
             auth: auth
         )
 
@@ -937,7 +946,11 @@ final class PushNotificationManager: ObservableObject {
         let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows]
             .map { $0 ? "1" : "0" }.joined()
         let silentGroups = GroupChatService.shared.groupSilentNotifications.sorted().joined(separator: "+")
-        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors]).joined(separator: ",")
+        // KaChat Wallet's own addresses and app id: a new address or a switched notification
+        // changes what the service must watch.
+        let watchOnly = collectWatchOnlyAddresses().joined(separator: "+")
+        let topic = Self.apnsTopic ?? ""
+        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors] + ["|", watchOnly] + ["|", topic]).joined(separator: ",")
     }
 
     /// Unregister device (call on logout/wallet delete)
@@ -1556,14 +1569,8 @@ final class PushNotificationManager: ObservableObject {
     /// service sends public chat-room pushes for these while the app is closed. Bell off =
     /// channel excluded = no push.
     private func collectWatchedPublicChatChannels() -> [String] {
-        // Simple Mode: no public chat channels registered with the push service at all. Toggling
-        // the mode posts .settingsDidChange -> refreshRegistrationIfNeeded -> updateWatchedAddresses,
-        // whose fingerprint includes this list, so the re-registration happens automatically.
-        guard !AppSettings.load().childModeEnabled else { return [] }
-        return PublicChatService.shared.channels
-            .filter { PublicChatService.isIndexerTracked($0.channelName) && $0.notifyEnabled }
-            .map(\.channelName)
-            .sorted()
+        // KaChat Wallet has no Public Chats: never ask for room pushes (PUSH_SERVICE.md).
+        []
     }
 
     /// Per-room hidden senders for the watched (indexed) channels - the push service must not
@@ -1581,13 +1588,10 @@ final class PushNotificationManager: ObservableObject {
         return result
     }
 
-    /// The wallet's K (KaPosts) identity - the push service sends "actions on your content"
-    /// pushes for it while the app is closed. Nil when no wallet is loaded.
+    /// The K (KaPosts) identity KaChat registers for "actions on your content" pushes.
     private func collectKaPostsPubkey() -> String? {
-        // Simple Mode: no KaPosts identity registered with the push service - same auto
-        // re-registration path as collectWatchedPublicChatChannels above.
-        guard !AppSettings.load().childModeEnabled else { return nil }
-        return try? KaPostsAPIClient.shared.requesterPubkey()
+        // KaChat Wallet has no KaPosts: never ask for KaPosts pushes (PUSH_SERVICE.md).
+        nil
     }
 
     /// The authors this account asked to hear about when they post (KaPosts' bell). Empty in
@@ -1597,45 +1601,28 @@ final class PushNotificationManager: ObservableObject {
         return KaPostsWatchStore.shared.watchedPubkeys
     }
 
-    private func collectWatchedAddresses() -> [String] {
-        let settings = AppSettings.load()
-        return ChatService.shared.pushEligibleConversationAddresses(settings: settings)
+    /// KaChat Wallet's own addresses for "Received" pushes (see
+    /// `AddressActivityNotifier.pushWatchOnlyAddresses`).
+    private func collectWatchOnlyAddresses() -> [String] {
+        AddressActivityNotifier.shared.pushWatchOnlyAddresses()
     }
 
-    /// `blinded_group_id` is per-sender, not per-group, so for each local group we watch every
-    /// OTHER member's blinded id (never our own - we don't need a push for messages we sent).
-    /// Returns nil when ANY group's bag fails to load (transient keychain/SE hiccup): the indexer
-    /// treats an update as a full replace, so silently `continue`-ing (the old behavior) submitted
-    /// a truncated list that DELETED the failed group's subscriptions server-side - that group then
-    /// received no pushes at all until an unrelated successful update.
+    /// The APNs topic this build's device token belongs to - its bundle id. Sent at register and
+    /// update so a push service shared by several apps (KaChat, KaChat Wallet, KaPosts...) sends
+    /// with the right `apns-topic`; one that ignores it uses its single configured topic, and
+    /// Apple rejects the wallet's pushes with DeviceTokenNotForTopic (PUSH_SERVICE.md).
+    static let apnsTopic: String? = Bundle.main.bundleIdentifier
+
+    private func collectWatchedAddresses() -> [String] {
+        // KaChat Wallet has no chats: never ask for chat pushes, even for a conversation KaChat's
+        // code created in the background (PUSH_SERVICE.md).
+        []
+    }
+
+    /// The blinded group ids KaChat watches for group pushes. Nil meant a group key failed to load.
     private func collectWatchedGroupIds() -> [String]? {
-        let myAddress = WalletManager.shared.currentWallet?.publicAddress
-        var ids = Set<String>()
-        for group in GroupChatService.shared.groups {
-            // A silenced group is not watched at all: no push is ever sent for it, so the
-            // silence holds whether or not the notification extension gets to run (an
-            // undecryptable or payload-less push used to fall back to a generic "New group
-            // message" banner with no way to know which group it was for). Messages still
-            // arrive through the block scan and catch-up, as they do for muted members.
-            guard !GroupChatService.shared.silentNotifications(for: group.id) else { continue }
-            guard let bag = try? KeychainService.shared.loadGroupBag(groupId: group.id),
-                  let blindingKey = Data(hexString: bag.blindingKey) else {
-                AppLog.log("[Push] Failed to load group bag for %@ - aborting group-id collection", group.id)
-                return nil
-            }
-            let mutedAddresses = GroupChatService.shared.mutedMemberAddresses(for: group.id)
-            for member in group.members {
-                // A muted member's messages still show up in the thread (block-scan/catch-up
-                // aren't gated on this at all) - simply not watching their blinded id means the
-                // indexer never pushes a notification for them specifically, which is exactly
-                // "mute": still visible, just silent.
-                guard member.address != myAddress, !mutedAddresses.contains(member.address),
-                      let memberPubKey = Data(hexString: member.xOnlyPubKeyHex) else { continue }
-                let blindedGroupId = GroupCipher.deriveBlindedGroupId(blindingKey: blindingKey, memberXOnlyPubKey: memberPubKey)
-                ids.insert(blindedGroupId.hexString)
-            }
-        }
-        return Array(ids)
+        // KaChat Wallet has no group chats: never ask for group pushes (PUSH_SERVICE.md).
+        []
     }
 
     private func collectAliases(forWatchedAddresses watchedAddresses: [String]? = nil) -> [String] {
@@ -2317,6 +2304,10 @@ struct PushRegistrationRequest: Codable {
     /// PushKit VoIP token (hex), for ringing this device through `/v1/push/ring`. Same APNs
     /// environment as `deviceToken`. Missing/null = this device cannot be rung.
     let voipToken: String?
+    /// KaChat Wallet: own addresses to push "Received" for (server "Address Activity").
+    let watchOnlyAddresses: [String]
+    /// This build's bundle id, the APNs topic its token is valid for.
+    let apnsTopic: String?
     let auth: PushAuthRequest?
 
     enum CodingKeys: String, CodingKey {
@@ -2337,6 +2328,8 @@ struct PushRegistrationRequest: Codable {
         case aliases
         case apnsEnvironment = "apns_environment"
         case voipToken = "voip_token"
+        case watchOnlyAddresses = "watch_only_addresses"
+        case apnsTopic = "apns_topic"
         case auth
     }
 }
@@ -2363,6 +2356,10 @@ struct PushUpdateRequest: Codable {
     let apnsEnvironment: String
     /// See PushRegistrationRequest.
     let voipToken: String?
+    /// KaChat Wallet: own addresses to push "Received" for (server "Address Activity").
+    let watchOnlyAddresses: [String]
+    /// This build's bundle id, the APNs topic its token is valid for.
+    let apnsTopic: String?
     let auth: PushAuthRequest?
 
     enum CodingKeys: String, CodingKey {
@@ -2382,6 +2379,8 @@ struct PushUpdateRequest: Codable {
         case aliases
         case apnsEnvironment = "apns_environment"
         case voipToken = "voip_token"
+        case watchOnlyAddresses = "watch_only_addresses"
+        case apnsTopic = "apns_topic"
         case auth
     }
 }

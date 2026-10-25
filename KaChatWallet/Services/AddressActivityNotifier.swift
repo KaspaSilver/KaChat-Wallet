@@ -109,6 +109,26 @@ final class AddressActivityNotifier: ObservableObject {
         return spendingAddressSet.union(coldLabelByAddress.keys)
     }
 
+    /// What the push service watches for this device's "Received" pushes (the register/update
+    /// `watch_only_addresses`): the main address, the spending addresses while their switch is
+    /// on, and every cold-storage address whose account notifies - the same choices the local
+    /// notifications follow. Empty while Address Activity is off. The service keeps 200 at most.
+    /// KaChat Wallet only: KaChat itself gets the main address's payments as chat pushes.
+    func pushWatchOnlyAddresses() -> [String] {
+        guard featureEnabled else { return [] }
+        refreshCaches()
+        reloadSpendingSwitchForCurrentWallet()
+        var addresses: Set<String> = []
+        if let wallet = WalletManager.shared.currentWallet?.publicAddress {
+            addresses.insert(wallet)
+        }
+        if spendingReceiveNotificationsEnabled {
+            addresses.formUnion(spendingAddressSet)
+        }
+        addresses.formUnion(Set(coldLabelByAddress.keys).subtracting(coldMutedAddresses))
+        return addresses.sorted()
+    }
+
     /// UserInfo key carrying the involved own addresses on a `.ownAddressUtxoActivity` post.
     static let utxoActivityAddressesKey = "addresses"
 

@@ -152,6 +152,7 @@ struct MainTabView: View {
             // the wallet doesn't have - so nothing waits on it: lift the onboarding hold now.
             walletManager.justCreatedNewWallet = false
             chatService.releaseSyncForOnboarding()
+            requestNotificationPermissionIfNeeded()
         }
         .fullScreenCover(isPresented: $showInitialSyncProgress) {
             InitialSyncProgressModal(onDismiss: { showInitialSyncProgress = false })
@@ -376,6 +377,31 @@ struct MainTabView: View {
     }
 
     // MARK: - Notification routing
+
+    /// KaChat Wallet asks once, the first time its tabs show, for permission to notify - KaChat
+    /// asks from its Chats screen, which the wallet doesn't have. Granted (with push on, the
+    /// default), the device registers with the push service for "Received" pushes on its own
+    /// addresses; denied, notifications are switched off as KaChat does.
+    private func requestNotificationPermissionIfNeeded() {
+        guard !settingsViewModel.settings.notificationPermissionRequested else { return }
+        settingsViewModel.settings.notificationPermissionRequested = true
+        settingsViewModel.saveSettings()
+        Task { @MainActor in
+            do {
+                if settingsViewModel.settings.notificationMode == .remotePush {
+                    try await PushNotificationManager.shared.requestPermissionAndRegister()
+                } else {
+                    let granted = try await UNUserNotificationCenter.current()
+                        .requestAuthorization(options: [.alert, .sound, .badge])
+                    if !granted { throw PushError.permissionDenied }
+                }
+            } catch {
+                settingsViewModel.settings.notificationsEnabled = false
+                settingsViewModel.saveSettings()
+                AppLog.log("[MainTabView] Notification permission not granted: %@", error.localizedDescription)
+            }
+        }
+    }
 
     /// Public Chat notification or a shared room link: the rooms are the Chats screen's Public
     /// Chats tab now. ChatListView switches to that tab on the same signals, and the rooms
