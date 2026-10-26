@@ -39,7 +39,8 @@ before the server change.
 
 ## Server changes needed
 
-What's open and what's done is tracked in [INDEXER_HANDOFF.md](INDEXER_HANDOFF.md).
+§0 (watch-only part), §1 and §2 are done (kachat-indexer 27f9c57). §0's primary-address case and
+§3 are handed off in the indexer repo: `docs/KACHAT_WALLET_PUSH.md`.
 
 ### 0. Accept a registration with only watch-only addresses or a primary address (required)
 

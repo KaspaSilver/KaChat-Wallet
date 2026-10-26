@@ -13,10 +13,9 @@ KaChat Wallet started from KaChat's own wallet code
 
 ## For the server
 
-What KaChat Wallet needs from the KaChat server (kachat-indexer) is written up in this repo, and
-the server is built from it:
-
-- [INDEXER_HANDOFF.md](INDEXER_HANDOFF.md) - open and done server items, newest first
-- [PUSH_SERVICE.md](PUSH_SERVICE.md) - the push notification spec (Received KAS, .kachat names)
+What KaChat Wallet needs from the KaChat server is handed off in the server's own repo,
+[KaChat-Indexer](https://github.com/KaspaSilver/KaChat-Indexer), under `docs/` (e.g.
+`docs/KACHAT_WALLET_PUSH.md`). The push contract the app follows is
+[PUSH_SERVICE.md](PUSH_SERVICE.md).
 
 MIT licensed - see [LICENSE](LICENSE).

@@ -98,10 +98,12 @@ still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_S
 
 ## Server hand-offs
 
-This session never changes kachat-indexer (or any server repo). Anything the server needs because
-of a wallet change goes in `INDEXER_HANDOFF.md` as an **Open** item - what the app sends and
-expects, the wallet commit and the spec file (e.g. `PUSH_SERVICE.md`) - and the indexer session
-builds it from there. Specs live in this repo, linked from the README's "For the server" section.
+This session never changes the server's code. When kachat-indexer
+(`/Users/restosaved/KaChat Server/kachat-indexer`, `KaspaSilver/KaChat-Indexer`) needs a change,
+write a hand-off doc in that repo's `docs/` (one per change, e.g. `docs/KACHAT_WALLET_PUSH.md`),
+in its format: a dated title, "**For:** the indexer session. **From:** the KaChat Wallet iOS
+session", then what the app sends and expects, the rule, where in the server it goes, the wallet
+commits, and how to test. Commit and push only that doc there; the indexer session builds from it.
 
 ## Protocol and servers
 
