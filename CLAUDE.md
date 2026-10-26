@@ -65,7 +65,9 @@ Version.xcconfig) are listed in the project's exception set.
 xcodebuild -project KaChatWallet.xcodeproj -scheme KaChatWallet -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
 ```
 
-Claude may build for the iOS Simulator and run it there. Device and App Store builds are the
+Claude writes the code and never tests it - no Simulator driving, screenshots or verification
+builds; the owner does all testing. When the owner says "rebuild", build with the command above
+and install + launch the app in the Simulator, then stop. Device and App Store builds are the
 owner's.
 
 ## Chats are off
