@@ -76,7 +76,8 @@ batches go to `AddressActivityNotifier` ("Received KAS") and a balance refresh, 
 Every chat path checks the flag and does nothing - handshakes, message sync and fallback
 polling, payments-as-chat, contact sweeps, catch-ups, group live polling and catch-up, KaPosts
 notifications, the unnamed-contact .kachat sweep, the local message load (and its "chat with
-yourself"), extension contact/group syncs, and background fetch (which refreshes the balance
+yourself"), extension contact/group syncs, incoming pushes (`handleRemoteNotification` leaves
+them to iOS as plain banners), and background fetch (which refreshes the balance
 and catches up receives instead). The icon never shows a badge. Notifications are only for the
 wallet's own addresses, Cold Storage and .kachat names. The chat code itself still compiles;
 change nothing in it unless removing it.

@@ -445,7 +445,8 @@ final class PushNotificationManager: ObservableObject {
                     watchedAddresses: watchedAddresses,
                     watchedGroupIds: watchedGroupIds,
                     aliases: aliases,
-                    primaryAddress: primaryAddress
+                    primaryAddress: primaryAddress,
+                    watchOnlyAddresses: watchOnlyAddresses
                 )
                 return
             }
@@ -537,7 +538,8 @@ final class PushNotificationManager: ObservableObject {
         watchedAddresses: [String],
         watchedGroupIds: [String],
         aliases: [String],
-        primaryAddress: String?
+        primaryAddress: String?,
+        watchOnlyAddresses: [String]
     ) {
         isRegistered = true
         lastError = nil
@@ -558,7 +560,8 @@ final class PushNotificationManager: ObservableObject {
 
         SharedDataManager.syncContactsForExtension()
 
-        AppLog.log("[Push] Registered with indexer, watching %d addresses", watchedAddresses.count)
+        AppLog.log("[Push] Registered with indexer, watching %d own addresses (+%d chat)",
+                   watchOnlyAddresses.count, watchedAddresses.count)
         if registrationContinuation != nil {
             completeRegistration()
         }
@@ -884,7 +887,8 @@ final class PushNotificationManager: ObservableObject {
             watchedUpdateRetryAttempt = 0
             watchedUpdateRetryTask?.cancel()
             watchedUpdateRetryTask = nil
-            AppLog.log("[Push] Updated watched addresses: %d (+%d group ids)", watchedAddresses.count, watchedGroupIds.count)
+            AppLog.log("[Push] Updated watched addresses: %d own (+%d chat, +%d group ids)",
+                       watchOnlyAddresses.count, watchedAddresses.count, watchedGroupIds.count)
         } catch {
             AppLog.log("[Push] Error updating addresses: %@", error.localizedDescription)
             inFlightWatchedSignature = nil
@@ -1183,6 +1187,10 @@ final class PushNotificationManager: ObservableObject {
     }
 
     func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> Bool {
+        // KaChat Wallet has no chats: its pushes ("Received", .kachat name events) are plain
+        // banners iOS shows by itself. Everything below turns a push into a chat message, so
+        // a push - shown, tapped or delivered in the background - never reaches it.
+        guard ChatService.chatsEnabled else { return false }
         let settings = AppSettings.load()
         guard settings.notificationMode == .remotePush else { return false }
 
