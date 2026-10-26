@@ -96,6 +96,13 @@ the Wallet page (Address Activity, sound, vibration). It asks for notification p
 its tabs first show. Entitlements carry `aps-environment` (development / production). The service
 still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_SERVICE.md`.
 
+## Server hand-offs
+
+This session never changes kachat-indexer (or any server repo). Anything the server needs because
+of a wallet change goes in `INDEXER_HANDOFF.md` as an **Open** item - what the app sends and
+expects, the wallet commit and the spec file (e.g. `PUSH_SERVICE.md`) - and the indexer session
+builds it from there. Specs live in this repo, linked from the README's "For the server" section.
+
 ## Protocol and servers
 
 Same as KaChat: the node pool for balances and transactions, the Kaspa REST API and CoinGecko for

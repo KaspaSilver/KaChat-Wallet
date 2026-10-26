@@ -11,4 +11,12 @@ A Kaspa wallet for iPhone, from the makers of KaChat.
 KaChat Wallet started from KaChat's own wallet code
 ([KaChat-iPhone](https://github.com/KaspaSilver/KaChat-iPhone)) so KaChat can focus on chats.
 
+## For the server
+
+What KaChat Wallet needs from the KaChat server (kachat-indexer) is written up in this repo, and
+the server is built from it:
+
+- [INDEXER_HANDOFF.md](INDEXER_HANDOFF.md) - open and done server items, newest first
+- [PUSH_SERVICE.md](PUSH_SERVICE.md) - the push notification spec (Received KAS, .kachat names)
+
 MIT licensed - see [LICENSE](LICENSE).

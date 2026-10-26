@@ -39,13 +39,16 @@ before the server change.
 
 ## Server changes needed
 
+What's open and what's done is tracked in [INDEXER_HANDOFF.md](INDEXER_HANDOFF.md).
+
 ### 0. Accept a registration with only watch-only addresses or a primary address (required)
 
 `push.rs` `register` (line ~152) and `update` (line ~468) bail with
 `watched_addresses and watched_group_ids must not both be empty`. The wallet sends both empty,
-so today every wallet register/update gets a 400 (seen live on 2026-10-25 from a Simulator
-build). Allow it when `watch_only_addresses` is non-empty, or - for a wallet device whose user
-turned Address Activity off - when only `primary_address` is set (its .kachat name events):
+so every wallet register/update got a 400 (seen live on 2026-10-25 from a Simulator
+build). kachat-indexer 27f9c57 allows it when `watch_only_addresses` is non-empty; still open:
+allow it when only `primary_address` is set - a wallet device whose user turned Address
+Activity off, kept for its .kachat name events:
 
 ```rust
 if addresses.is_empty() && group_ids.is_empty() && normalized_watch_only.is_empty()
@@ -60,6 +63,8 @@ empty list's hash.) The wallet retries a failed update with backoff (5 s, 30 s, 
 120 s), so it registers by itself once this ships.
 
 ### 1. Send each device's pushes on its own APNs topic (required)
+
+Done in kachat-indexer 27f9c57.
 
 Today `ApnsClient` sends every push with the one `APNS_TOPIC` (`com.kachat.app`). Apple rejects a
 wallet token on that topic with `DeviceTokenNotForTopic`, which the service treats as a dead
@@ -80,6 +85,8 @@ No new key is needed: an APNs auth key (`.p8`) works for every app on the team, 
 (`apns_environment`, sandbox vs production host) already works per device and needs no change.
 
 ### 2. Give wallet devices only Received and .kachat pushes (required)
+
+Done in kachat-indexer 27f9c57.
 
 A wallet device has a `primary_address`, so today it would also match
 `matching_tokens_for_inbox` (no-handshake messages hash the primary address). For devices whose
@@ -131,7 +138,7 @@ address hash. Not needed to ship.
 1. Deploy the service with `APNS_ALLOWED_TOPICS=com.kachat.app,com.kachat.wallet`.
 2. Install a KaChat Wallet build on a phone, allow notifications on first launch (the wallet asks
    once, when its tabs first show). The log shows
-   `[Push] Registered with indexer, watching N addresses`.
+   `[Push] Registered with indexer, watching N own addresses (+0 chat)`.
 3. Send KAS to the wallet's address from another wallet, with KaChat Wallet in the background:
    a "Received X KAS" push arrives; tapping it opens that address's history.
 4. Server log: the send uses `topic=com.kachat.wallet`; no `DeviceTokenNotForTopic`.
