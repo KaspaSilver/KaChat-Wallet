@@ -55,7 +55,7 @@ extension ChatService {
     func processParsedUtxoChangeNotification(_ parsed: ParsedUtxosChangedNotification) async {
         guard let wallet = WalletManager.shared.currentWallet else { return }
         // KaChat Wallet: no chat classification - only "Received KAS" for the wallet's own
-        // addresses (self-sends suppressed by the per-tx removed sets) and the live balance.
+        // addresses (self-sends suppressed: any input spending from our addresses) and the live balance.
         guard Self.chatsEnabled else {
             var removedByTxId: [String: Set<String>] = [:]
             for entry in parsed.removed {
@@ -64,7 +64,7 @@ extension ChatService {
                 }
             }
             AddressActivityNotifier.shared.postUtxoActivityEvent(parsed: parsed, removedByTxId: removedByTxId)
-            AddressActivityNotifier.shared.handleLiveUtxoAdditions(parsed: parsed, removedByTxId: removedByTxId)
+            AddressActivityNotifier.shared.handleLiveUtxoAdditions(parsed: parsed)
             _ = try? await WalletManager.shared.refreshBalance(force: true)
             return
         }
@@ -483,7 +483,7 @@ extension ChatService {
         // decision/setting - it's what keeps the payment composer's Available pill and the
         // address list screens live for self-send change too.
         AddressActivityNotifier.shared.postUtxoActivityEvent(parsed: parsed, removedByTxId: removedByTxId)
-        AddressActivityNotifier.shared.handleLiveUtxoAdditions(parsed: parsed, removedByTxId: removedByTxId)
+        AddressActivityNotifier.shared.handleLiveUtxoAdditions(parsed: parsed)
 
         if !parsed.added.isEmpty {
             saveMessages()

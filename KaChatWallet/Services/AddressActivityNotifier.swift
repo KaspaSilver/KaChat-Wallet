@@ -10,14 +10,15 @@ import UserNotifications
 /// Manage Addresses / Cold Storage screens stay in sync.
 ///
 /// Self-send filtering is the critical part - change from own payments, consolidations,
-/// KNS inscription change, cold-storage withdrawals and pool payments between own addresses
-/// must NOT notify. Two layers:
-///   1. Fast path: the same `utxosChanged` batch carries `removed` entries for every watched
-///      address the tx spends FROM - any own address there means we funded the tx ourselves.
-///      Because ALL own addresses (chatting + spending + cold + reserved pool) are in the
-///      watched set, virtually every self-send is caught here without a network call.
-///   2. REST resolve (the classifier's own endpoint, `resolve_previous_outpoints=light`):
-///      fetch the tx and check whether ANY input address is one of ours.
+/// KNS inscription change, cold-storage withdrawals, pool payments between own addresses, and
+/// anything another app on the same seed sends (a KaPosts post, a KaChat message) must NOT
+/// notify. A tx counts as ours when ANY of its inputs spends from one of our addresses:
+///   1. REST resolve (the classifier's own endpoint, `resolve_previous_outpoints=light`):
+///      fetch the tx and check its input addresses.
+///   2. The API often leaves a seconds-old tx's input addresses empty, so an unresolved input
+///      is matched against the coins our addresses just spent (the `removed` entries of the
+///      live batches, by outpoint), then looked up in the tx that created it.
+///   3. A tx that can't be read at all is ours when the same batch spent from our addresses.
 /// Notifications are deduped per txId (persisted, capped) and multiple outputs of one tx to
 /// our addresses notify once with the summed amount.
 ///
@@ -93,6 +94,11 @@ final class AddressActivityNotifier: ObservableObject {
     private static let handledTxIdCap = 500
 
     private var inFlightTxIds: Set<String> = []
+    /// Outpoints (`txid:index`) our addresses spent, from the live batches' `removed` entries -
+    /// kept a few minutes so a receive whose input addresses the REST API hasn't filled in yet
+    /// can still be recognised as our own spend.
+    private var recentOwnSpentOutpoints: [String: Date] = [:]
+    private static let ownSpentOutpointTTL: TimeInterval = 600
     private var lastCatchUpAt: Date?
     private var lastCatchUpWallet: String?
 
@@ -135,8 +141,8 @@ final class AddressActivityNotifier: ObservableObject {
     /// Always-post internal event, deliberately separate from the user-notification decision:
     /// posts `.ownAddressUtxoActivity` (with the involved own addresses) whenever a UTXO batch
     /// touches any watched spending/cold address - including SELF-SEND change, which the
-    /// notification paths suppress. `handleLiveUtxoAdditions`' fast path handles self-sends
-    /// with no `.ownAddressActivity` post at all, and the whole notifier is gated by the
+    /// notification paths suppress. `handleLiveUtxoAdditions` posts `.ownAddressActivity` only
+    /// after its self-send check (seconds later), and the whole notifier is gated by the
     /// Address Activity notification setting - so UI that must track its own change landing
     /// (the payment composer's Available pill, the address list screens) listens to THIS
     /// event instead. Not gated by `featureEnabled`.
@@ -163,17 +169,21 @@ final class AddressActivityNotifier: ObservableObject {
         )
     }
 
-    /// Live path, called from the UTXO classifier with the whole parsed batch. Collects
-    /// outputs landing on own non-chatting addresses, dedupes per txId, applies the
-    /// removed-set fast path, and schedules REST input resolution for the rest.
-    func handleLiveUtxoAdditions(
-        parsed: ParsedUtxosChangedNotification,
-        removedByTxId: [String: Set<String>]
-    ) {
+    /// Live path, called from the UTXO classifier with the whole parsed batch. Remembers the
+    /// coins our addresses spent, collects outputs landing on own notifiable addresses, dedupes
+    /// per txId, and schedules the self-send check (REST input resolution) for each tx.
+    func handleLiveUtxoAdditions(parsed: ParsedUtxosChangedNotification) {
         guard featureEnabled else { return }
         guard let wallet = WalletManager.shared.currentWallet else { return }
         refreshCaches()
         ensureHandledTxIdsLoaded(wallet: wallet.publicAddress)
+
+        // A batch's `removed` entries are keyed by the outpoint they spend (the tx that created
+        // the coin), not by the spending tx - so they're remembered by outpoint and matched
+        // against each receive's inputs once its tx is fetched.
+        let ownAll = ownInputAddressSet(walletAddress: wallet.publicAddress)
+        recordOwnSpends(parsed.removed, ownAddresses: ownAll)
+        let batchSpentOwn = parsed.removed.contains { $0.address.map(ownAll.contains) ?? false }
 
         let notifiable = notifiableAddressSet(walletAddress: wallet.publicAddress)
         guard !notifiable.isEmpty else { return }
@@ -190,24 +200,15 @@ final class AddressActivityNotifier: ObservableObject {
         }
         guard !hitsByTx.isEmpty else { return }
 
-        let ownAll = ownInputAddressSet(walletAddress: wallet.publicAddress)
         for (txId, hits) in hitsByTx {
             guard !handledTxIds.contains(txId), !inFlightTxIds.contains(txId) else { continue }
-
-            // Fast path: the tx spends FROM one of our watched addresses in this same
-            // batch - self-send (change, consolidation, withdrawal...), suppress silently.
-            if let removed = removedByTxId[txId], !removed.isDisjoint(with: ownAll) {
-                markHandled(txId: txId, wallet: wallet.publicAddress)
-                Task { await self.refreshBaselines(for: Set(hits.map { $0.address }), wallet: wallet.publicAddress) }
-                continue
-            }
-
             inFlightTxIds.insert(txId)
             Task { [weak self] in
                 await self?.resolveAndNotifyLive(
                     txId: txId,
                     hits: hits,
                     ownAddresses: ownAll,
+                    batchSpentOwn: batchSpentOwn,
                     walletAddress: wallet.publicAddress
                 )
             }
@@ -283,25 +284,24 @@ final class AddressActivityNotifier: ObservableObject {
         txId: String,
         hits: [(address: String, amount: UInt64)],
         ownAddresses: Set<String>,
+        batchSpentOwn: Bool,
         walletAddress: String
     ) async {
         defer { inFlightTxIds.remove(txId) }
 
-        var isSelfSend = false
         var hits = hits
         let fullTx = await ChatService.shared.fetchKaspaFullTransaction(
             txId: txId,
-            retries: 4,
-            delayNs: 1_500_000_000
+            retries: 6,
+            delayNs: 2_000_000_000
         )
+        var spendsOwn: Bool?
         if let fullTx {
-            let inputAddresses = (fullTx.inputs ?? [])
-                .compactMap { $0.previousOutpointAddress }
-                .filter { !$0.isEmpty }
-            if !inputAddresses.isEmpty {
-                isSelfSend = inputAddresses.contains { ownAddresses.contains($0) }
-            }
+            spendsOwn = await spendsOwnFunds(fullTx, ownAddresses: ownAddresses)
         }
+        // Inputs we couldn't place (or no tx at all): an own spend in the same batch makes it
+        // our own change far more likely than a receive - e.g. a KaPosts post from this seed.
+        let isSelfSend = spendsOwn ?? batchSpentOwn
         // The chatting address notifies only for a plain transfer we could read: a chat payment
         // or a handshake (a payload) is the chat's news, and an unreadable one stays quiet.
         // KaChat Wallet has no chats: its main address is a wallet address like the rest.
@@ -313,9 +313,8 @@ final class AddressActivityNotifier: ObservableObject {
             await refreshBaselines(for: [walletAddress], wallet: walletAddress)
             return
         }
-        // Unresolvable txs still notify: the removed-set fast path already suppressed every
-        // self-send whose inputs we watch (which is all of them), so an unknown-input tx here
-        // is overwhelmingly external - missing real funds is worse than a rare duplicate.
+        // An unreadable tx in a batch that spent nothing of ours still notifies: missing real
+        // funds is worse than a rare stray ping.
 
         guard !handledTxIds.contains(txId) else { return }
         markHandled(txId: txId, wallet: walletAddress)
@@ -378,10 +377,8 @@ final class AddressActivityNotifier: ObservableObject {
                 continue
             }
             attributedAny = true
-            let inputAddresses = (tx.inputs ?? [])
-                .compactMap { $0.previousOutpointAddress }
-                .filter { !$0.isEmpty }
-            let isSelfSend = !inputAddresses.isEmpty && inputAddresses.contains { ownAll.contains($0) }
+            let isSelfSend = await spendsOwnFunds(tx, ownAddresses: ownAll) ?? false
+            guard !handledTxIds.contains(tx.transactionId) else { continue }
             markHandled(txId: tx.transactionId, wallet: walletAddress)
             if !isSelfSend {
                 postReceiveNotification(hits: [(address, toAddress)], dedupeKey: tx.transactionId)
@@ -579,6 +576,63 @@ final class AddressActivityNotifier: ObservableObject {
         var set = spendingAddressSet.union(coldLabelByAddress.keys)
         set.insert(walletAddress)
         return set
+    }
+
+    // MARK: - Self-send check
+
+    /// Whether `tx` spends from any of our addresses: true as soon as one input is ours, false
+    /// when every input is placed and none is, nil when some input couldn't be placed. An input
+    /// the REST API left unresolved (usual for a tx seconds old) is matched against the coins our
+    /// addresses just spent, then looked up in the tx that created it.
+    private func spendsOwnFunds(_ tx: KaspaFullTransactionResponse, ownAddresses: Set<String>) async -> Bool? {
+        guard let inputs = tx.inputs, !inputs.isEmpty else { return nil }
+        pruneOwnSpends()
+        var unresolved: [(hash: String, index: Int)] = []
+        var unknown = false
+        for input in inputs {
+            if let address = input.previousOutpointAddress, !address.isEmpty {
+                if ownAddresses.contains(address) { return true }
+            } else if let hash = input.previousOutpointHash,
+                      let index = input.previousOutpointIndex.flatMap({ Int($0) }) {
+                if recentOwnSpentOutpoints[Self.outpointKey(hash, index)] != nil { return true }
+                unresolved.append((hash, index))
+            } else {
+                unknown = true
+            }
+        }
+        var previousTxs: [String: KaspaFullTransactionResponse] = [:]
+        for (hash, index) in unresolved {
+            if previousTxs[hash] == nil,
+               let previous = await ChatService.shared.fetchFullTransaction(txId: hash, resolvePrevious: false) {
+                previousTxs[hash] = previous
+            }
+            let outputs = previousTxs[hash]?.outputs ?? []
+            let spent = outputs.first(where: { $0.index == index }) ?? (outputs.indices.contains(index) ? outputs[index] : nil)
+            guard let address = spent?.scriptPublicKeyAddress, !address.isEmpty else {
+                unknown = true
+                continue
+            }
+            if ownAddresses.contains(address) { return true }
+        }
+        return unknown ? nil : false
+    }
+
+    private func recordOwnSpends(_ removed: [ParsedUtxoEntry], ownAddresses: Set<String>) {
+        let now = Date()
+        for entry in removed {
+            guard let address = entry.address, ownAddresses.contains(address) else { continue }
+            recentOwnSpentOutpoints[Self.outpointKey(entry.transactionId, Int(entry.outputIndex))] = now
+        }
+        pruneOwnSpends()
+    }
+
+    private func pruneOwnSpends() {
+        let cutoff = Date().addingTimeInterval(-Self.ownSpentOutpointTTL)
+        recentOwnSpentOutpoints = recentOwnSpentOutpoints.filter { $0.value > cutoff }
+    }
+
+    private static func outpointKey(_ txId: String, _ index: Int) -> String {
+        "\(txId.lowercased()):\(index)"
     }
 
     // MARK: - Baseline persistence (UserDefaults, per wallet)

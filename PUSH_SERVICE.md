@@ -92,7 +92,31 @@ Simplest place: filter the resolved token list in each non-wallet fan-out (DM / 
 payment / inbox / group / group control / broadcast / KaPosts / ring) by dropping wallet-topic
 tokens - or keep a per-topic allowlist of push kinds next to `APNS_ALLOWED_TOPICS`.
 
-### 3. Optional: one banner per receive
+### 3. No "Received" push for a self-send (required)
+
+Only Kaspa from someone else may ping. Anything the owner sends from their own addresses - in
+the wallet, or in another app on the same seed (a KaPosts post, a KaChat message) - returns
+change to a watched address and today gets a "Received" push (seen on 2026-10-26: a KaPosts
+post from the same seed pinged the wallet).
+
+The filter exists (`watch_only_tokens` drops a device that also watches `sender`), but
+`emit_funds_received` (`indexer-actors/src/block_processor.rs`) finds `sender` only for the
+FIRST input, and only through `tx_id_to_acceptance_partition` - which holds Kasia message txs
+only, and its key's `receiver` is that tx's receiver, not the owner of the spent output. A coin
+from a plain transfer, a KaPosts post or a coinbase gives `sender = None`, so the push goes out.
+
+Fix: place EVERY input's spent output by its outpoint, not by the previous tx's message record.
+For example, keep a partition (or a bounded LRU, a few hours deep) `outpoint (tx_id, index) ->
+address payload` for outputs paying a watched (`watch_only_contains`) address, written in the
+same pass that reads `tx.outputs`. In `emit_funds_received`, collect the addresses of all inputs
+found there into `senders: Vec<AddressPayload>`, and have `watch_only_tokens` drop a device whose
+`watch_only_addresses` contain ANY of them. Inputs not in the map are not the device's coins
+(every coin a device owns paid one of its watched addresses), so no node lookup is needed. A
+device that started watching after the coin was created has it missing from the map - seed the
+map when a device registers or adds addresses (`getUtxosByAddresses` for the new addresses), or
+accept a rare stray ping until those coins are spent once.
+
+### 4. Optional: one banner per receive
 
 While the wallet is open it shows its own local "Received" notification and hides the push
 banner (it suppresses `funds:` threads in the foreground). Just after it goes to the background
