@@ -216,8 +216,7 @@ final class PushNotificationManager: ObservableObject {
             return
         }
 
-        let watchedAddresses = collectWatchedAddresses()
-        guard !watchedAddresses.isEmpty || !collectWatchOnlyAddresses().isEmpty else { return }
+        guard hasPushSubscriptions() else { return }
 
         Task {
             do {
@@ -425,8 +424,10 @@ final class PushNotificationManager: ObservableObject {
 
         // Group ids alone are a valid registration - requiring a non-empty 1:1 list meant a user
         // with groups but no push-eligible 1:1 chats never registered for group pushes at all.
-        // KaChat Wallet has neither: its own addresses (watch-only) are its registration.
-        guard !watchedAddresses.isEmpty || !watchedGroupIds.isEmpty || !watchOnlyAddresses.isEmpty else {
+        // KaChat Wallet has neither: its own addresses (watch-only) and its main address
+        // (.kachat name events) are its registration.
+        guard hasPushSubscriptions(watchedAddresses: watchedAddresses, watchedGroupIds: watchedGroupIds,
+                                   watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) else {
             throw PushError.noWatchedAddresses
         }
 
@@ -665,8 +666,7 @@ final class PushNotificationManager: ObservableObject {
         guard hasPushService else { return }
 
         if !isRegistered {
-            let watchedAddresses = collectWatchedAddresses()
-            guard !watchedAddresses.isEmpty || !collectWatchOnlyAddresses().isEmpty else { return }
+            guard hasPushSubscriptions() else { return }
             if shouldDeferRegistrationForWalletBindingConflict() {
                 return
             }
@@ -756,8 +756,10 @@ final class PushNotificationManager: ObservableObject {
         let watchOnlyAddresses = collectWatchOnlyAddresses()
         // Only unregister when there is NOTHING left to watch. Group ids alone are a valid
         // registration - unregistering whenever the 1:1 list was empty killed ALL group pushes for
-        // users with groups but no push-eligible 1:1 chats. So are KaChat Wallet's own addresses.
-        if watchedAddresses.isEmpty && watchedGroupIds.isEmpty && watchOnlyAddresses.isEmpty {
+        // users with groups but no push-eligible 1:1 chats. So are KaChat Wallet's own addresses,
+        // and its main address alone (.kachat name events, with Address Activity off).
+        if !hasPushSubscriptions(watchedAddresses: watchedAddresses, watchedGroupIds: watchedGroupIds,
+                                 watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) {
             AppLog.log("[Push] No eligible chats for push, unregistering device from indexer")
             await unregister()
             lastWatchedSignature = ""
@@ -1644,6 +1646,21 @@ final class PushNotificationManager: ObservableObject {
 
     private func collectPrimaryAddress() -> String? {
         WalletManager.shared.currentWallet?.publicAddress
+    }
+
+    /// Whether this device has anything to register for. KaChat Wallet: its main address alone
+    /// is enough - .kachat name events go to `primary_address` whether or not Address Activity
+    /// (the watch-only list) is on, so switching that off must not unregister the device.
+    private func hasPushSubscriptions(
+        watchedAddresses: [String]? = nil,
+        watchedGroupIds: [String]? = nil,
+        watchOnlyAddresses: [String]? = nil,
+        primaryAddress: String? = nil
+    ) -> Bool {
+        if !(watchedAddresses ?? collectWatchedAddresses()).isEmpty { return true }
+        if !(watchedGroupIds ?? collectWatchedGroupIds() ?? []).isEmpty { return true }
+        if !(watchOnlyAddresses ?? collectWatchOnlyAddresses()).isEmpty { return true }
+        return !ChatService.chatsEnabled && (primaryAddress ?? collectPrimaryAddress()) != nil
     }
 
     private func buildPushAuth(

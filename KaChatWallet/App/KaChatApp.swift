@@ -901,9 +901,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
             return
         }
 
-        // A .kachat name event (offer, sale, accepted offer, renewal reminder - thread
-        // "kachat-names", set by the notification extension): open that name.
-        if threadIdentifier == "kachat-names" {
+        // A .kachat name event (offer, sale, accepted offer, renewal reminder): open that name.
+        // The phone's own reminders carry thread "kachat-names"; the service's push carries
+        // `type: name_event` and no thread (KaChat's notification extension set one, and the
+        // wallet has no extension).
+        let isNameEvent = response.notification.request.content.userInfo["type"] as? String == "name_event"
+        if threadIdentifier == "kachat-names" || isNameEvent {
             let name = response.notification.request.content.userInfo["name"] as? String
             Task { @MainActor in
                 KachatDeepLink.pendingName = name.map { KachatNames.Codec.normalize($0) }

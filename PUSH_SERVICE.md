@@ -28,7 +28,8 @@ encrypted chat push would show as a bare banner.
 - `primary_address`: the wallet's main address
 - `watch_only_addresses`: the main address, its spending addresses (while their switch is on)
   and the cold-storage addresses whose account notifies - at most 200; empty when the user turns
-  Address Activity off
+  Address Activity off (the device stays registered for .kachat name events through
+  `primary_address`)
 - `apns_environment`: `"development"` (Xcode builds) or `"production"` (TestFlight / App Store)
 - **`apns_topic`: `"com.kachat.wallet"`** - new field, see below
 - `voip_token`: null
@@ -38,16 +39,19 @@ before the server change.
 
 ## Server changes needed
 
-### 0. Accept a registration with only watch-only addresses (required)
+### 0. Accept a registration with only watch-only addresses or a primary address (required)
 
 `push.rs` `register` (line ~152) and `update` (line ~468) bail with
 `watched_addresses and watched_group_ids must not both be empty`. The wallet sends both empty,
 so today every wallet register/update gets a 400 (seen live on 2026-10-25 from a Simulator
-build). Allow it when `watch_only_addresses` is non-empty:
+build). Allow it when `watch_only_addresses` is non-empty, or - for a wallet device whose user
+turned Address Activity off - when only `primary_address` is set (its .kachat name events):
 
 ```rust
-if addresses.is_empty() && group_ids.is_empty() && normalized_watch_only.is_empty() {
-    anyhow::bail!("watched_addresses, watched_group_ids and watch_only_addresses must not all be empty");
+if addresses.is_empty() && group_ids.is_empty() && normalized_watch_only.is_empty()
+    && primary_address.is_none()
+{
+    anyhow::bail!("nothing to watch: watched_addresses, watched_group_ids, watch_only_addresses and primary_address are all empty");
 }
 ```
 

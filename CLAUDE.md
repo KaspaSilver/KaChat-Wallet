@@ -86,7 +86,10 @@ change nothing in it unless removing it.
 
 The wallet registers with KaChat's push service for "Received KAS" (its own addresses as
 `watch_only_addresses`) and .kachat name events (`primary_address`), with `apns_topic` =
-`com.kachat.wallet` - no chats, rooms or KaPosts. It asks for notification permission once, when
+`com.kachat.wallet` - no chats, rooms or KaPosts. With Address Activity off it stays registered
+through `primary_address` alone. A `name_event` push has no thread id (the wallet has no
+notification extension); a tap routes by its `type` and `name`. Settings > Notifications has only
+the Wallet page (Address Activity, sound, vibration). It asks for notification permission once, when
 its tabs first show. Entitlements carry `aps-environment` (development / production). The service
 still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_SERVICE.md`.
 

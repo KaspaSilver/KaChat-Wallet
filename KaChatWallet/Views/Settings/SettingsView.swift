@@ -1139,9 +1139,6 @@ struct NotificationsHubPage: View {
             }
 
             Section("Notifications") {
-                settingsCategoryRow("Chats", icon: "bubble.left.and.bubble.right", tint: .accentColor) {
-                    NotificationsSettingsView()
-                }
                 settingsCategoryRow("Wallet", icon: "banknote", tint: .accentColor) {
                     WalletNotificationSettingsView()
                 }
@@ -1227,7 +1224,8 @@ struct NotificationsHubPage: View {
 }
 
 /// Settings > Notifications > Wallet: the own-address receive-activity toggle (see
-/// AddressActivityNotifier).
+/// AddressActivityNotifier) and the sound/vibration it and every foreground banner use - the
+/// settings KaChat kept on its Chats page.
 struct WalletNotificationSettingsView: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
@@ -1239,7 +1237,23 @@ struct WalletNotificationSettingsView: View {
                         settingsViewModel.saveSettings()
                     }
             } footer: {
-                Text("Notify when any of your spending or cold storage addresses receives Kaspa from an external source. Transfers between your own addresses are ignored.")
+                Text("Notify when Kaspa from someone else arrives at your main address, a spending address or a cold storage address. Transfers between your own addresses are ignored. Spending addresses and each cold storage account also have their own switch.")
+            }
+
+            Section {
+                Toggle("Play sound", isOn: $settingsViewModel.settings.incomingNotificationSoundEnabled)
+                    .onChange(of: settingsViewModel.settings.incomingNotificationSoundEnabled) { _ in
+                        settingsViewModel.saveSettings()
+                    }
+
+                Toggle("Vibration", isOn: $settingsViewModel.settings.incomingNotificationVibrationEnabled)
+                    .onChange(of: settingsViewModel.settings.incomingNotificationVibrationEnabled) { _ in
+                        settingsViewModel.saveSettings()
+                    }
+            } header: {
+                Text("Sound & Vibration")
+            } footer: {
+                Text("For Received notifications, and for any notification while the app is open. With sound off, Vibration gives a light tap instead while the app is open.")
             }
         }
         .navigationTitle("Wallet")
@@ -1326,59 +1340,6 @@ struct KaPostsNotificationSettingsView: View {
         }
         .navigationTitle("KaPosts")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct NotificationsSettingsView: View {
-    @EnvironmentObject var settingsViewModel: SettingsViewModel
-
-    @State private var toastMessage: String?
-    @State private var toastToken = UUID()
-    @State private var toastStyle: ToastStyle = .success
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Play sound", isOn: $settingsViewModel.settings.incomingNotificationSoundEnabled)
-                    .onChange(of: settingsViewModel.settings.incomingNotificationSoundEnabled) { _ in
-                        settingsViewModel.saveSettings()
-                    }
-
-                Toggle("Vibration", isOn: $settingsViewModel.settings.incomingNotificationVibrationEnabled)
-                    .onChange(of: settingsViewModel.settings.incomingNotificationVibrationEnabled) { _ in
-                        settingsViewModel.saveSettings()
-                    }
-            } header: {
-                Text("Sound & Vibration")
-            } footer: {
-                Text("Used when a contact has no custom notification mode set.")
-            }
-
-            Section("Per Contact") {
-                Text("Set per-contact notification mode in each chat's info screen: Off, No Sound, or Sound.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .toast(message: toastMessage, style: toastStyle)
-        .navigationTitle("Chats")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func showToast(_ message: String, style: ToastStyle = .success) {
-        let token = UUID()
-        toastToken = token
-        toastStyle = style
-        withAnimation(.easeOut(duration: 0.2)) {
-            toastMessage = message
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            if toastToken == token {
-                withAnimation(.easeIn(duration: 0.2)) {
-                    toastMessage = nil
-                }
-            }
-        }
     }
 }
 
