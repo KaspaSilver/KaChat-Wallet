@@ -104,7 +104,7 @@ struct SeedPhraseExplainerPage: View {
                 section("The short version",
                         "A seed phrase is a list of 12 or 24 ordinary words that works as the master key to your account. Your wallet, its addresses and your .kachat names all come from it.")
                 section("Anyone with it can take everything",
-                        "Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaChat.")
+                        "Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaPay.")
                 section("How to keep it safe",
                         "Write the words on paper, in order, and keep them somewhere safe and private. Never type them into a website, send them in a chat, or keep them in a screenshot or cloud notes.")
                 section("12 or 24 words?",

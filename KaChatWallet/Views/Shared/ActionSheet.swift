@@ -585,3 +585,51 @@ struct UnderlineTabBar<Tab: Hashable>: View {
         }
     }
 }
+
+// MARK: - Wallet action tile
+
+/// One square tile of the Wallet tab's Send and Receive half sheet - KaChat's create tile: an
+/// icon over a short title on the app's frosted card.
+struct WalletActionTile: View {
+    static let size: CGFloat = 104
+
+    let title: LocalizedStringKey
+    let hint: LocalizedStringKey
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundColor(.accentColor)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(8)
+            .frame(width: Self.size, height: Self.size)
+            .background(sendKaspaGlass(cornerRadius: 18))
+        }
+        .buttonStyle(WalletActionTilePressStyle())
+        .accessibilityHint(Text(hint))
+    }
+}
+
+/// A light wash over the tile while it's held.
+private struct WalletActionTilePressStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.10))
+                    .opacity(configuration.isPressed ? 1 : 0)
+            )
+    }
+}

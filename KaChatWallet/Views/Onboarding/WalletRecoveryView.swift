@@ -27,7 +27,7 @@ struct WalletRecoveryView: View {
                     Text("Recovery Phrase Needed")
                         .font(.title2.weight(.bold))
                         .multilineTextAlignment(.center)
-                    Text("This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaChat's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here. Your messages on this device are kept.")
+                    Text("This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPay's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)

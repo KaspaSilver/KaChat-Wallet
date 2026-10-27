@@ -521,7 +521,7 @@
 "This device has already received the welcome gift." = "এই ডিভাইস ইতিমধ্যেই স্বাগতম উপহার পেয়েছে।";
 "This domain is not available." = "এই ডোমেইন উপলব্ধ নয়.";
 "This is a live check of your iCloud account, separate from local storage above." = "এটি আপনার iCloud অ্যাকাউন্টের একটি লাইভ চেক, উপরের স্থানীয় স্টোরেজ থেকে আলাদা।";
-"This only removes it from KaChat's watch list. It has no effect on the KasSigner device or any funds it holds." = "এটি শুধুমাত্র KaChat-এর ওয়াচ তালিকা থেকে এটি সরায়। এর KasSigner ডিভাইস বা এতে থাকা কোনো তহবিলের উপর কোনো প্রভাব নেই।";
+"This only removes it from KaPay's watch list. It has no effect on the KasSigner device or any funds it holds." = "এটি শুধুমাত্র KaPay-এর ওয়াচ তালিকা থেকে এটি সরায়। এর KasSigner ডিভাইস বা এতে থাকা কোনো তহবিলের উপর কোনো প্রভাব নেই।";
 "This removes \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) and its local data from this device." = "এটি \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) এবং এর স্থানীয় ডেটা এই ডিভাইস থেকে সরিয়ে দেয়।";
 "This removes \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) and its local data from this device." = "এটি \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) এবং এর স্থানীয় ডেটা এই ডিভাইস থেকে সরিয়ে দেয়।";
 "This removes discovered nodes, disconnects current sessions, and restarts discovery." = "এটি আবিষ্কৃত নোড সরায়, বর্তমান সেশন সংযোগ বিচ্ছিন্ন করে এবং আবিষ্কার পুনরায় শুরু করে।";
@@ -644,8 +644,8 @@
 "Not available on this network" = "এই নেটওয়ার্কে উপলব্ধ নয়";
 "No testnet indexer yet" = "এখনো কোনো টেস্টনেট ইনডেক্সার নেই";
 "Testnet" = "টেস্টনেট";
-"Close KaChat completely and open it again to finish switching to Testnet." = "টেস্টনেটে বদল শেষ করতে KaChat পুরোপুরি বন্ধ করে আবার খুলুন।";
-"Close KaChat completely and open it again to finish switching back to Mainnet." = "মেইননেটে ফেরা শেষ করতে KaChat পুরোপুরি বন্ধ করে আবার খুলুন।";
+"Close KaPay completely and open it again to finish switching to Testnet." = "টেস্টনেটে বদল শেষ করতে KaPay পুরোপুরি বন্ধ করে আবার খুলুন।";
+"Close KaPay completely and open it again to finish switching back to Mainnet." = "মেইননেটে ফেরা শেষ করতে KaPay পুরোপুরি বন্ধ করে আবার খুলুন।";
 "#%@ is off - turn it back on in Public Chats settings" = "#%@ বন্ধ - পাবলিক চ্যাট সেটিংসে আবার চালু করুন";
 "Automatic Scan discovers and connects to the best available nodes. Choosing a specific node connects only to it, without falling back to others. Doesn't affect the indexers, domains or explorer on the other tabs. Add custom addresses to the IP Address Book below to select them here." = "স্বয়ংক্রিয় স্ক্যান সেরা উপলব্ধ নোড খুঁজে সংযোগ করে। নির্দিষ্ট নোড বাছলে শুধু সেটিতেই সংযোগ করে, অন্যটিতে যায় না। অন্য ট্যাবের ইনডেক্সার, ডোমেইন বা এক্সপ্লোরারে প্রভাব ফেলে না। এখানে বাছতে নিচের IP ঠিকানা বইয়ে আপনার ঠিকানা যোগ করুন।";
 
@@ -816,7 +816,7 @@
 "The registration stops and the commit's 0.2 KAS comes back to you, less the network fee." = "নিবন্ধন থেমে যাবে আর কমিটের 0.2 KAS নেটওয়ার্ক ফি বাদে আপনার কাছে ফিরে আসবে।";
 "Sending the hidden commit..." = "লুকানো কমিট পাঠানো হচ্ছে...";
 "Waiting for the commit to confirm..." = "কমিট নিশ্চিত হওয়ার অপেক্ষা...";
-"The commit has to age for about a minute before the name can be registered. Keep KaChat open - it registers by itself, and picks up where it left off if you leave." = "নাম নিবন্ধনের আগে কমিটকে প্রায় এক মিনিট পুরোনো হতে হবে। KaChat খোলা রাখুন - এটি নিজেই নিবন্ধন করবে, আর আপনি বেরিয়ে গেলে যেখানে থেমেছিল সেখান থেকে চালিয়ে যাবে।";
+"The commit has to age for about a minute before the name can be registered. Keep KaPay open - it registers by itself, and picks up where it left off if you leave." = "নাম নিবন্ধনের আগে কমিটকে প্রায় এক মিনিট পুরোনো হতে হবে। KaPay খোলা রাখুন - এটি নিজেই নিবন্ধন করবে, আর আপনি বেরিয়ে গেলে যেখানে থেমেছিল সেখান থেকে চালিয়ে যাবে।";
 "Registering..." = "নিবন্ধন হচ্ছে...";
 "Registered. It's yours." = "নিবন্ধিত। এটি এখন আপনার।";
 "Someone registered this name first. Cancel the commit to get its 0.2 KAS back." = "অন্য কেউ এই নামটি আগে নিবন্ধন করেছেন। 0.2 KAS ফেরত পেতে কমিট বাতিল করুন।";
@@ -858,7 +858,7 @@
 "Cost" = "খরচ";
 "The price goes to the miners - KaChat takes nothing. The bond and the deposit come back when you release the name." = "দাম যায় মাইনারদের কাছে - KaChat কিছুই নেয় না। নাম ছেড়ে দিলে বন্ড ও জমা ফেরত আসে।";
 "A hidden commit goes on chain first. Nobody can see which name it is for." = "প্রথমে একটি লুকানো কমিট চেইনে যায়। কেউ দেখতে পায় না সেটি কোন নামের জন্য।";
-"About a minute later KaChat registers the name by itself. Keep the app open; if you leave, it continues next time." = "প্রায় এক মিনিট পরে KaChat নিজেই নামটি নিবন্ধন করে। অ্যাপ খোলা রাখুন; বেরিয়ে গেলে পরের বার চালিয়ে যাবে।";
+"About a minute later KaPay registers the name by itself. Keep the app open; if you leave, it continues next time." = "প্রায় এক মিনিট পরে KaPay নিজেই নামটি নিবন্ধন করে। অ্যাপ খোলা রাখুন; বেরিয়ে গেলে পরের বার চালিয়ে যাবে।";
 "The name is yours for the years you paid. Renew it any time before it expires." = "যত বছরের জন্য দিয়েছেন তত বছর নামটি আপনার। মেয়াদ শেষ হওয়ার আগে যেকোনো সময় নবায়ন করুন।";
 "How claiming works" = "নাম নেওয়া যেভাবে কাজ করে";
 "Claim %@.kachat" = "%@.kachat নিন";
@@ -1112,8 +1112,8 @@
 "Passphrase" = "পাসফ্রেজ";
 
 /* Addresses of the other network are refused (IOS-003) */
-"This is a Testnet address. KaChat is on Mainnet." = "এটি একটি Testnet ঠিকানা। KaChat এখন Mainnet-এ আছে।";
-"This is a Mainnet address. KaChat is on Testnet." = "এটি একটি Mainnet ঠিকানা। KaChat এখন Testnet-এ আছে।";
+"This is a Testnet address. KaPay is on Mainnet." = "এটি একটি Testnet ঠিকানা। KaPay এখন Mainnet-এ আছে।";
+"This is a Mainnet address. KaPay is on Testnet." = "এটি একটি Mainnet ঠিকানা। KaPay এখন Testnet-এ আছে।";
 
 /* Siri / Shortcuts payments are confirmed (IOS-021) */
 "Send %@ to %@?" = "%2$@-কে %1$@ পাঠাবেন?";
@@ -1173,7 +1173,7 @@
 
 /* .kachat registration progress half sheet */
 "Claiming %@" = "%@ দাবি করা হচ্ছে";
-"Keep KaChat open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back." = "KaChat খোলা রাখুন: গোপন প্রতিশ্রুতি নিশ্চিত হওয়ার প্রায় এক মিনিট পরে নামটি নিবন্ধিত হয়। আপনি চলে গেলে, ফিরে এলে যেখানে থেমেছিল সেখান থেকে চলবে।";
+"Keep KaPay open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back." = "KaPay খোলা রাখুন: গোপন প্রতিশ্রুতি নিশ্চিত হওয়ার প্রায় এক মিনিট পরে নামটি নিবন্ধিত হয়। আপনি চলে গেলে, ফিরে এলে যেখানে থেমেছিল সেখান থেকে চলবে।";
 "Finish the name you're claiming first." = "আগে যে নামটি দাবি করছেন সেটি শেষ করুন।";
 
 /* .kachat name lapsed: moved to Reclaimable */
@@ -1212,7 +1212,7 @@
 "How many words is the seed phrase you're importing?" = "আপনি যে seed phrase ইমপোর্ট করছেন তাতে কয়টি শব্দ আছে?";
 "What is this?" = "এটা কী?";
 "What is a seed phrase?" = "seed phrase কী?";
-"Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaChat." = "যার কাছে এই শব্দগুলো থাকবে সে আপনার অ্যাকাউন্টের সবকিছু নিয়ে নিতে পারবে। আপনি এগুলো হারালে আর এই ডিভাইসও হারালে কেউ আপনার অ্যাকাউন্ট ফেরত দিতে পারবে না, KaChat-ও না।";
+"Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaPay." = "যার কাছে এই শব্দগুলো থাকবে সে আপনার অ্যাকাউন্টের সবকিছু নিয়ে নিতে পারবে। আপনি এগুলো হারালে আর এই ডিভাইসও হারালে কেউ আপনার অ্যাকাউন্ট ফেরত দিতে পারবে না, KaPay-ও না।";
 "Write the words on paper, in order, and keep them somewhere safe and private. Never type them into a website, send them in a chat, or keep them in a screenshot or cloud notes." = "শব্দগুলো ক্রমানুসারে কাগজে লিখে কোনো নিরাপদ ও ব্যক্তিগত জায়গায় রাখুন। কখনো কোনো ওয়েবসাইটে টাইপ করবেন না, চ্যাটে পাঠাবেন না, বা স্ক্রিনশট বা ক্লাউড নোটে রাখবেন না।";
 "12 words are already very secure. 24 words add even more protection." = "১২টি শব্দ ইতিমধ্যেই খুব নিরাপদ। ২৪টি শব্দ আরও বেশি সুরক্ষা দেয়।";
 
@@ -1259,7 +1259,7 @@
 "Save a Kaspa address with a name you'll recognize." = "চেনা নাম দিয়ে একটি ক্যাসপা ঠিকানা সংরক্ষণ করুন।";
 "Add to Address Book" = "ঠিকানা বইয়ে যোগ করুন";
 "Search names and addresses" = "নাম ও ঠিকানা খুঁজুন";
-"Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts." = "আপনি যে Kaspa ঠিকানাগুলো ব্যবহার করেন সেগুলো চেনা নামে সংরক্ষণ করুন। এগুলো KaChat-এ থাকে, শুধু এই ওয়ালেটের জন্য, এবং কখনো আপনার ফোনের কন্টাক্টসে যায় না।";
+"Save the Kaspa addresses you use with a name you'll recognize. They stay in KaPay, for this wallet only, and never go into your phone's Contacts." = "আপনি যে Kaspa ঠিকানাগুলো ব্যবহার করেন সেগুলো চেনা নামে সংরক্ষণ করুন। এগুলো KaPay-এ থাকে, শুধু এই ওয়ালেটের জন্য, এবং কখনো আপনার ফোনের কন্টাক্টসে যায় না।";
 "Copied" = "কপি হয়েছে";
 "Share Address" = "ঠিকানা শেয়ার করুন";
 "Edit" = "সম্পাদনা";
@@ -1267,7 +1267,7 @@
 "Delete %@ from your Address Book?" = "ঠিকানা বই থেকে %@ মুছবেন?";
 "Not in your Address Book" = "আপনার ঠিকানা বইয়ে নেই";
 "Note (optional)" = "নোট (ঐচ্ছিক)";
-"Saved in KaChat for this wallet only. Never added to your phone's Contacts." = "শুধু এই ওয়ালেটের জন্য KaChat-এ সংরক্ষিত। কখনো আপনার ফোনের কন্টাক্টসে যোগ হয় না।";
+"Saved in KaPay for this wallet only. Never added to your phone's Contacts." = "শুধু এই ওয়ালেটের জন্য KaPay-এ সংরক্ষিত। কখনো আপনার ফোনের কন্টাক্টসে যোগ হয় না।";
 "Remove from Address Book" = "ঠিকানা বই থেকে সরান";
 "Edit Address" = "ঠিকানা সম্পাদনা";
 "Add addresses in Kaspa Hub > Address Book." = "Kaspa Hub > ঠিকানা বই থেকে ঠিকানা যোগ করুন।";
@@ -1324,10 +1324,10 @@
 "Claiming sends two transactions: the commit now, the registration about a minute later. Both use this speed." = "দাবি করতে দুটি লেনদেন যায়: এখন কমিট, প্রায় এক মিনিট পরে নিবন্ধন। দুটোই এই গতিতে।";
 "Sent to the network" = "নেটওয়ার্কে পাঠানো হয়েছে";
 "In a block" = "একটি ব্লকে";
-"Updated in KaChat" = "KaChat-এ হালনাগাদ";
+"Updated in KaPay" = "KaPay-এ হালনাগাদ";
 "Waiting for the network to put it in a block. Usually a few seconds; longer when it's busy." = "নেটওয়ার্ক একে ব্লকে রাখার অপেক্ষায়। সাধারণত কয়েক সেকেন্ড; ব্যস্ত থাকলে বেশি।";
-"It's in a block. Updating KaChat..." = "এটি ব্লকে আছে। KaChat হালনাগাদ হচ্ছে...";
-"Done. It shows in KaChat now." = "সম্পন্ন। এখন KaChat-এ দেখা যাচ্ছে।";
+"It's in a block. Updating KaPay..." = "এটি ব্লকে আছে। KaPay হালনাগাদ হচ্ছে...";
+"Done. It shows in KaPay now." = "সম্পন্ন। এখন KaPay-এ দেখা যাচ্ছে।";
 "The network hasn't taken it. Nothing was spent if it never lands - try again with a faster fee." = "নেটওয়ার্ক এখনো নেয়নি। কখনো না পৌঁছালে কিছুই খরচ হয়নি - দ্রুত ফি দিয়ে আবার চেষ্টা করুন।";
 "Tap the transaction to open it in the explorer." = "এক্সপ্লোরারে খুলতে লেনদেনে ট্যাপ করুন।";
 
@@ -1338,8 +1338,8 @@
 "Tap an offer to accept or decline it. Expired offers go back to their buyers." = "গ্রহণ বা প্রত্যাখ্যান করতে একটি অফারে ট্যাপ করুন। মেয়াদোত্তীর্ণ অফার ক্রেতার কাছে ফিরে যায়।";
 
 /* Audit run 3: Address Book network checks, .kachat fee re-check */
-"Every address in that file is a Mainnet address. KaChat is on Testnet." = "এই ফাইলের প্রতিটি ঠিকানা Mainnet-এর। KaChat এখন Testnet-এ।";
-"Every address in that file is a Testnet address. KaChat is on Mainnet." = "এই ফাইলের প্রতিটি ঠিকানা Testnet-এর। KaChat এখন Mainnet-এ।";
+"Every address in that file is a Mainnet address. KaPay is on Testnet." = "এই ফাইলের প্রতিটি ঠিকানা Mainnet-এর। KaPay এখন Testnet-এ।";
+"Every address in that file is a Testnet address. KaPay is on Mainnet." = "এই ফাইলের প্রতিটি ঠিকানা Testnet-এর। KaPay এখন Mainnet-এ।";
 "Skipped %lld from the other network." = "অন্য নেটওয়ার্কের %lldটি বাদ দেওয়া হয়েছে।";
 "The network fee went up to %@ since you confirmed. Nothing was sent. Check the new fee and confirm again." = "আপনি নিশ্চিত করার পর নেটওয়ার্ক ফি বেড়ে %@ হয়েছে। কিছুই পাঠানো হয়নি। নতুন ফি দেখে আবার নিশ্চিত করুন।";
 
@@ -1396,7 +1396,7 @@
 
 /* .kachat: combining many small coins before a name transaction */
 "Your KAS is in many small coins. Combining them into one first..." = "আপনার KAS অনেক ছোট কয়েনে ভাগ হয়ে আছে। আগে সেগুলো একটিতে মেলানো হচ্ছে...";
-"Your KAS is in many small coins. KaChat combines them into one before registering, for a tiny extra network fee." = "আপনার KAS অনেক ছোট কয়েনে ভাগ হয়ে আছে। নিবন্ধনের আগে KaChat সেগুলো একটিতে মেলায়, সামান্য অতিরিক্ত নেটওয়ার্ক ফিতে।";
+"Your KAS is in many small coins. KaPay combines them into one before registering, for a tiny extra network fee." = "আপনার KAS অনেক ছোট কয়েনে ভাগ হয়ে আছে। নিবন্ধনের আগে KaPay সেগুলো একটিতে মেলায়, সামান্য অতিরিক্ত নেটওয়ার্ক ফিতে।";
 
 /* .kachat mainnet launch countdown */
 "Names open in" = "নাম খুলবে";
@@ -1452,7 +1452,7 @@
 "Send Payment Request" = "পেমেন্ট অনুরোধ পাঠান";
 
 /* .kachat transaction sheet: coins are combined only after the slide (IOS-075) */
-"Your KAS is in many small coins. When you slide, KaChat first combines them into one (a separate transaction with its own small fee), then sends this." = "আপনার KAS অনেক ছোট কয়েনে রয়েছে। স্লাইড করলে KaChat প্রথমে সেগুলো একটিতে মেলাবে (আলাদা লেনদেন, নিজস্ব ছোট ফি সহ), তারপর এটি পাঠাবে।";
+"Your KAS is in many small coins. When you slide, KaPay first combines them into one (a separate transaction with its own small fee), then sends this." = "আপনার KAS অনেক ছোট কয়েনে রয়েছে। স্লাইড করলে KaPay প্রথমে সেগুলো একটিতে মেলাবে (আলাদা লেনদেন, নিজস্ব ছোট ফি সহ), তারপর এটি পাঠাবে।";
 
 /* An address's Domains tab: one card per name service */
 "No %@ names on this address." = "এই ঠিকানায় কোনো %@ নাম নেই।";
@@ -1559,7 +1559,7 @@
 "Recovery Phrase Needed" = "রিকভারি বাক্যাংশ দরকার";
 "Enter Recovery Phrase" = "রিকভারি বাক্যাংশ লিখুন";
 "%@ is on this iPhone, but its keys are not. That happens after restoring from a backup, because keys are locked to the phone they were made on. Enter the account's recovery phrase to sign in. Its history on this phone is kept." = "%@ এই iPhone-এ আছে, কিন্তু এর চাবিগুলো নেই। ব্যাকআপ থেকে রিস্টোর করার পর এমন হয়, কারণ চাবি যে ফোনে তৈরি হয়েছিল সেটিতেই আটকে থাকে। সাইন ইন করতে এই অ্যাকাউন্টের রিকভারি বাক্যাংশ লিখুন। এই ফোনে এর ইতিহাস থেকে যাবে।";
-"This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaChat's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here. Your messages on this device are kept." = "এই iPhone-এ আপনার অ্যাকাউন্ট আছে, কিন্তু এর চাবিগুলো নেই। ব্যাকআপ থেকে ফোন রিস্টোর করার পর এমন হয়, কারণ KaChat-এর চাবি যে ডিভাইসে তৈরি হয়েছিল সেটিতেই আটকে থাকে। এখানে খুলতে আপনার রিকভারি বাক্যাংশ লিখুন। এই ডিভাইসে আপনার বার্তাগুলো থেকে যাবে।";
+"This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPay's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here." = "এই iPhone-এ আপনার অ্যাকাউন্ট আছে, কিন্তু এর চাবিগুলো নেই। ব্যাকআপ থেকে ফোন রিস্টোর করার পর এমন হয়, কারণ KaPay-এর চাবি যে ডিভাইসে তৈরি হয়েছিল সেটিতেই আটকে থাকে। এখানে খুলতে আপনার রিকভারি বাক্যাংশ লিখুন। এই ডিভাইসে আপনার বার্তাগুলো থেকে যাবে।";
 
 
 /* The chat list's name for the chat with yourself */

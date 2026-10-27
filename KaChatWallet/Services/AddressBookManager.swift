@@ -309,8 +309,8 @@ final class AddressBookManager: ObservableObject {
             case .notAnAddressBook: return AppLocalization.string("That file isn't a KaChat Address Book export.")
             case .empty: return AppLocalization.string("That Address Book export has no addresses.")
             case .otherNetwork: return AppLocalization.string(AppSettings.load().networkType == .testnet
-                ? "Every address in that file is a Mainnet address. KaChat is on Testnet."
-                : "Every address in that file is a Testnet address. KaChat is on Mainnet.")
+                ? "Every address in that file is a Mainnet address. KaPay is on Testnet."
+                : "Every address in that file is a Testnet address. KaPay is on Mainnet.")
             }
         }
     }

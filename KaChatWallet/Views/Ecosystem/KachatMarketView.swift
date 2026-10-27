@@ -25,7 +25,7 @@ enum KachatTabIcon {
         return template
     }
 
-    /// KaChat Wallet's dock icon for .kachat: a name tag with an "@" cut out of it, filled like
+    /// KaPay's dock icon for .kachat: a name tag with an "@" cut out of it, filled like
     /// the SF Symbols beside it. A template image `side` points square.
     static func domainsImage(side: CGFloat) -> UIImage {
         let key = "domains-\(Int(side.rounded()))"

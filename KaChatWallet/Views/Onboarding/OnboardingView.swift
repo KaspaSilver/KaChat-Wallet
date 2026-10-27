@@ -43,7 +43,7 @@ struct OnboardingView: View {
                 // An overlay inside the buttons' own 40pt bottom padding, so the height budget
                 // that keeps Create and Import on screen is untouched.
                 .overlay(alignment: .bottom) {
-                    Text(verbatim: "KaChat Wallet \(AppVersion.display)")
+                    Text(verbatim: "KaPay \(AppVersion.display)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .padding(.bottom, 10)
@@ -145,11 +145,11 @@ struct OnboardingView: View {
 
     private var hasSavedAccounts: Bool { !walletManager.savedAccounts.isEmpty }
 
-    /// Wordmark with the app mark beside it. KaChat Wallet's name says what it is, so there is no
+    /// Wordmark with the app mark beside it. KaPay's name says what it is, so there is no
     /// tagline under it (owner's call, 2026-10-24).
     private var titleSection: some View {
         HStack(spacing: 10) {
-            Text(verbatim: "KaChat Wallet")
+            Text(verbatim: "KaPay")
                 .font(.largeTitle.weight(.bold))
             Image("KaChatWalletLogo")
                 .resizable()

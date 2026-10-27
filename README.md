@@ -1,4 +1,4 @@
-# KaChat Wallet
+# KaPay
 
 A Kaspa wallet for iPhone, from the makers of KaChat.
 
@@ -10,13 +10,13 @@ A Kaspa wallet for iPhone, from the makers of KaChat.
 - **Settings** - appearance, security, connection, notifications, storage, and a backup of the
   Address Book and Portfolio to your own Nextcloud if you connect one
 
-KaChat Wallet started from KaChat's own wallet code
+KaPay (formerly KaChat Wallet) started from KaChat's own wallet code
 ([KaChat-iPhone](https://github.com/KaspaSilver/KaChat-iPhone)) so KaChat can focus on chats. It
 carries no chat code: only the wallet.
 
 ## For the server
 
-What KaChat Wallet needs from the KaChat server is handed off in the server's own repo,
+What KaPay needs from the KaChat server is handed off in the server's own repo,
 [KaChat-Indexer](https://github.com/KaspaSilver/KaChat-Indexer), under `docs/` (e.g.
 `docs/KACHAT_WALLET_PUSH.md`). The push contract the app follows is
 [PUSH_SERVICE.md](PUSH_SERVICE.md).

@@ -1019,7 +1019,7 @@ final class PushNotificationManager: ObservableObject {
     }
 
     /// The APNs topic this build's device token belongs to - its bundle id. Sent at register and
-    /// update so a push service shared by several apps (KaChat, KaChat Wallet, ...) sends
+    /// update so a push service shared by several apps (KaChat, KaPay, ...) sends
     /// with the right `apns-topic` (PUSH_SERVICE.md).
     static let apnsTopic: String? = Bundle.main.bundleIdentifier
 

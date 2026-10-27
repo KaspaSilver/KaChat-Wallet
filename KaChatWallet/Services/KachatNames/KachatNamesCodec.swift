@@ -19,7 +19,7 @@ enum KachatNames {
         /// or a later one than v5 (`newerRegistry`). Not an error to show as one: the screens say
         /// the registry is being set up.
         static let outdatedRegistry = Failure("manifest: an earlier registry; this app needs a registry v4 or v5 manifest")
-        static let newerRegistry = Failure("manifest: a later registry version than this app builds for; update KaChat")
+        static let newerRegistry = Failure("manifest: a later registry version than this app builds for; update KaPay")
         /// Registry v5: `register` is refused until the migration deadline (unix ms).
         static func registrationNotOpen(_ deadlineMs: Int64) -> Failure {
             Failure("registration opens after the migration deadline (\(deadlineMs))")

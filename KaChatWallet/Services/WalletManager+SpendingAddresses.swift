@@ -450,6 +450,29 @@ extension WalletManager {
         return (index, address)
     }
 
+    /// Reveals and returns `count` brand-new quantum-chain (KIP-22) slots in one step - used by
+    /// Request Payment's Fresh Address. They start at the first slot past the chain end that is
+    /// unused on chain, and the chain end is raised to cover them before returning, so they have
+    /// never been revealed, funded or offered before, and no later reservation lands on them. The
+    /// addresses stay listed in Manage Addresses like any other revealed slot.
+    ///
+    /// Returns an empty array (reserving nothing, raising nothing) if derivation fails.
+    func reserveFreshSpendingAddresses(count: Int) async -> [(index: Int, address: String)] {
+        guard count > 0, let owner = currentWallet?.publicAddress, let chainKey = quantumChainKey() else { return [] }
+        // Probe, addresses and the raised chain end all belong to the account active at the
+        // start (IOS-109).
+        let base = await verifiedFreshQuantumIndex(owner: owner, chainKey: chainKey) - Self.quantumIndexBase
+        var result: [(index: Int, address: String)] = []
+        for offset in 0..<count {
+            let index = Self.quantumIndexBase + base + offset
+            guard let address = quantumAddress(at: index, chainKey: chainKey, owner: owner) else { return [] }
+            result.append((index: index, address: address))
+        }
+        guard accountStillSaved(owner) else { return [] }
+        setMaxQuantumAddressIndex(base + count - 1, owner: owner)
+        return result
+    }
+
     /// The probe for one account, taken when it starts (IOS-109, the sweep's rule from IOS-107):
     /// its slots are derived from that account's chain node and a used slot raises THAT
     /// account's chain end, even if another account is active when a probe returns. Once the

@@ -38,7 +38,7 @@ enum DeviceAuth {
     private static func presentPasscodeRequired() {
         let alert = UIAlertController(
             title: "Passcode Required",
-            message: "Set a passcode on this iPhone (Settings > Face ID & Passcode) to view or unlock secret keys in KaChat.",
+            message: "Set a passcode on this iPhone (Settings > Face ID & Passcode) to view or unlock secret keys in KaPay.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "OK", style: .default))

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The notices the libraries KaChat Wallet ships ask to travel with it - only what is in the
+/// The notices the libraries KaPay ships ask to travel with it - only what is in the
 /// binary (WebRTC left with calls, 2026-10-25). Opus (BSD-3) and BoringSSL (OpenSSL) require
 /// their notice in the binary's documentation; the Apache, MIT and ISC ones ask for
 /// attribution. Plain scrolling text, one card per library.
@@ -63,7 +63,7 @@ This product includes software developed by the OpenSSL Project for use in the O
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("KaChat Wallet is built with these open source libraries. Their authors ask that these notices travel with the app.")
+                    Text("KaPay is built with these open source libraries. Their authors ask that these notices travel with the app.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     ForEach(Self.notices) { notice in

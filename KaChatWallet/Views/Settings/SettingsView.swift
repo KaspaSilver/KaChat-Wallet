@@ -8,7 +8,7 @@ struct SettingsView: View {
     @EnvironmentObject var walletManager: WalletManager
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
-    /// KaChat Wallet shows Settings as its own dock tab: no Done button there.
+    /// KaPay shows Settings as its own dock tab: no Done button there.
     var isDockTab = false
 
     @State private var showSeedPhrase = false
@@ -400,8 +400,8 @@ struct ConnectionHubPage: View {
                 if settingsViewModel.selectedNetworkType != settingsViewModel.launchNetworkType {
                     Label {
                         Text(settingsViewModel.selectedNetworkType == .testnet
-                             ? LocalizedStringKey("Close KaChat completely and open it again to finish switching to Testnet.")
-                             : LocalizedStringKey("Close KaChat completely and open it again to finish switching back to Mainnet."))
+                             ? LocalizedStringKey("Close KaPay completely and open it again to finish switching to Testnet.")
+                             : LocalizedStringKey("Close KaPay completely and open it again to finish switching back to Mainnet."))
                     } icon: {
                         Image(systemName: "arrow.clockwise.circle.fill")
                             .foregroundColor(.orange)

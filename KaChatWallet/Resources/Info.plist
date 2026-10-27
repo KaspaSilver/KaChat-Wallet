@@ -28,11 +28,11 @@
 	<key>KaChatIsRelease</key>
 	<string>$(KACHAT_IS_RELEASE)</string>
 	<key>NSCameraUsageDescription</key>
-	<string>KaChat Wallet uses the camera to scan QR codes: Kaspa addresses, payment requests and Cold Storage signing.</string>
+	<string>KaPay uses the camera to scan QR codes: Kaspa addresses, payment requests and Cold Storage signing.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID is used to unlock your seed phrase and sign back in, when enabled in Settings.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>KaChat Wallet connects to your local network only if you point it at your own Kaspa node or Nextcloud server.</string>
+	<string>KaPay connects to your local network only if you point it at your own Kaspa node or Nextcloud server.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save QR codes and images you choose to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>

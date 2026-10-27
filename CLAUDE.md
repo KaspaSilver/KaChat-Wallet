@@ -2,9 +2,9 @@
 
 Guidance for Claude Code in this repository.
 
-## What KaChat Wallet is
+## What KaPay is
 
-KaChat Wallet is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
+KaPay (named KaChat Wallet until 2026-10-27) is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
 1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, the .kachat names
 marketplace, Address Book and the account's Wallet tab (receive, send, addresses, domains, help,
 about).
@@ -25,12 +25,15 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - the home tab, where the app opens after logging in; receive, the Chatting Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up arrow (bottom right) opens Send Kaspa |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - the home tab, where the app opens after logging in; receive, the Chatting Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up/down arrow (bottom right, as in KaChat) opens a half sheet: Send Kaspa, Receive Kaspa, Request Payment (`CreatePaymentRequestView`) |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity |
 | Settings | `SettingsView(isDockTab: true)` (`Views/Settings/SettingsView.swift`, `AppTab.settings`) - no Done button as a tab; Log Out is its last row |
 
 Account setup: `ContentView` -> `OnboardingView` (create / import a seed) -> `MainTabView`. The
-sign-in screen says "KaChat Wallet" with the wallet logo and no tagline.
+sign-in screen says "KaPay" with the wallet logo and no tagline. The rename kept every identifier
+(bundle ID, keychain group, URL scheme, folder and target names `KaChatWallet`): only what people
+read says KaPay. Texts about the KaChat ecosystem (KaChat profiles, .kachat names, the Nextcloud
+`KaChat` folder) still say KaChat.
 
 The Wallet tab keeps KaChat's profile (Receive, Chatting Address, Edit KaChat Profile, Your Domains,
 share link); Help has only the .kachat names guide. The bell (`GlobalNotificationCenter`) lists
@@ -47,9 +50,10 @@ share link); Help has only the .kachat names guide. The bell (`GlobalNotificatio
   `PortfolioManager`/`PortfolioViewModel`, `KNSService` and `KachatNames*` as their names say.
 - `NextcloudService`: backs up the Address Book and the Portfolio, nothing else, as two plain
   JSON files in the `KaChat` folder - never KaChat's `kachat-backup.json`:
-  `KaChat Wallet Address Book.json` (the Address Book export file, `AddressBookManager.ExportFile`,
-  with photos) and `KaChat Wallet Portfolio.json` (`PortfolioBackupFile`: portfolios,
-  transactions, fees and deletion tombstones). Connect with an app password. Automatic Backup
+  `KaPay Address Book.json` (the Address Book export file, `AddressBookManager.ExportFile`,
+  with photos) and `KaPay Portfolio.json` (`PortfolioBackupFile`: portfolios,
+  transactions, fees and deletion tombstones); a restore falls back to the pre-rename
+  `KaChat Wallet …` names. Connect with an app password. Automatic Backup
   (off by default) uploads a few seconds after either changes and on background; a backup merges
   the server's Portfolio in first (`PortfolioSync.merge`, newest edit or deletion wins), so two
   devices don't overwrite each other. Restore and a fresh connection merge both back
@@ -121,7 +125,7 @@ still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_S
 This session never changes the server's code. When kachat-indexer
 (`/Users/restosaved/KaChat Server/kachat-indexer`, `KaspaSilver/KaChat-Indexer`) needs a change,
 write a hand-off doc in that repo's `docs/` (one per change, e.g. `docs/KACHAT_WALLET_PUSH.md`),
-in its format: a dated title, "**For:** the indexer session. **From:** the KaChat Wallet iOS
+in its format: a dated title, "**For:** the indexer session. **From:** the KaPay (KaChat Wallet) iOS
 session", then what the app sends and expects, the rule, where in the server it goes, the wallet
 commits, and how to test. Commit and push only that doc there; the indexer session builds from it.
 

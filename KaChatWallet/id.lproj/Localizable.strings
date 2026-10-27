@@ -521,7 +521,7 @@
 "This device has already received the welcome gift." = "Perangkat ini sudah menerima hadiah selamat datang.";
 "This domain is not available." = "Domain ini tidak tersedia.";
 "This is a live check of your iCloud account, separate from local storage above." = "Ini adalah pemeriksaan langsung akun iCloud Anda, terpisah dari penyimpanan lokal.";
-"This only removes it from KaChat's watch list. It has no effect on the KasSigner device or any funds it holds." = "Ini hanya menghapusnya dari daftar pantau KaChat. Tidak berpengaruh pada perangkat KasSigner atau dana yang dimilikinya.";
+"This only removes it from KaPay's watch list. It has no effect on the KasSigner device or any funds it holds." = "Ini hanya menghapusnya dari daftar pantau KaPay. Tidak berpengaruh pada perangkat KasSigner atau dana yang dimilikinya.";
 "This removes \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) and its local data from this device." = "Ini menghapus \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) dan data lokalnya dari perangkat ini.";
 "This removes \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) and its local data from this device." = "Ini menghapus \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.displayAlias) (\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\(account.shortPublicAddress)) dan data lokalnya dari perangkat ini.";
 "This removes discovered nodes, disconnects current sessions, and restarts discovery." = "Ini menghapus node yang ditemukan, memutuskan sesi saat ini, dan mengulang pencarian.";
@@ -644,8 +644,8 @@
 "Not available on this network" = "Tidak tersedia di jaringan ini";
 "No testnet indexer yet" = "Belum ada pengindeks testnet";
 "Testnet" = "Testnet";
-"Close KaChat completely and open it again to finish switching to Testnet." = "Tutup KaChat sepenuhnya lalu buka lagi untuk menyelesaikan peralihan ke Testnet.";
-"Close KaChat completely and open it again to finish switching back to Mainnet." = "Tutup KaChat sepenuhnya lalu buka lagi untuk menyelesaikan kembali ke Mainnet.";
+"Close KaPay completely and open it again to finish switching to Testnet." = "Tutup KaPay sepenuhnya lalu buka lagi untuk menyelesaikan peralihan ke Testnet.";
+"Close KaPay completely and open it again to finish switching back to Mainnet." = "Tutup KaPay sepenuhnya lalu buka lagi untuk menyelesaikan kembali ke Mainnet.";
 "#%@ is off - turn it back on in Public Chats settings" = "#%@ dimatikan - nyalakan lagi di pengaturan Obrolan Publik";
 "Automatic Scan discovers and connects to the best available nodes. Choosing a specific node connects only to it, without falling back to others. Doesn't affect the indexers, domains or explorer on the other tabs. Add custom addresses to the IP Address Book below to select them here." = "Pemindaian Otomatis menemukan dan terhubung ke node terbaik yang tersedia. Memilih node tertentu hanya terhubung ke node itu, tanpa beralih ke yang lain. Tidak memengaruhi pengindeks, domain, atau penjelajah di tab lain. Tambahkan alamatmu ke Buku Alamat IP di bawah untuk memilihnya di sini.";
 
@@ -816,7 +816,7 @@
 "The registration stops and the commit's 0.2 KAS comes back to you, less the network fee." = "Pendaftaran berhenti dan 0.2 KAS dari komitmen kembali kepada Anda, dikurangi biaya jaringan.";
 "Sending the hidden commit..." = "Mengirim komitmen tersembunyi...";
 "Waiting for the commit to confirm..." = "Menunggu komitmen terkonfirmasi...";
-"The commit has to age for about a minute before the name can be registered. Keep KaChat open - it registers by itself, and picks up where it left off if you leave." = "Komitmen harus berumur sekitar satu menit sebelum nama bisa didaftarkan. Biarkan KaChat terbuka - ia mendaftar sendiri, dan melanjutkan dari titik terakhir jika Anda keluar.";
+"The commit has to age for about a minute before the name can be registered. Keep KaPay open - it registers by itself, and picks up where it left off if you leave." = "Komitmen harus berumur sekitar satu menit sebelum nama bisa didaftarkan. Biarkan KaPay terbuka - ia mendaftar sendiri, dan melanjutkan dari titik terakhir jika Anda keluar.";
 "Registering..." = "Mendaftarkan...";
 "Registered. It's yours." = "Terdaftar. Sekarang milik Anda.";
 "Someone registered this name first. Cancel the commit to get its 0.2 KAS back." = "Seseorang mendaftarkan nama ini lebih dulu. Batalkan komitmen untuk mendapatkan kembali 0.2 KAS.";
@@ -858,7 +858,7 @@
 "Cost" = "Biaya";
 "The price goes to the miners - KaChat takes nothing. The bond and the deposit come back when you release the name." = "Harga diberikan ke penambang - KaChat tidak mengambil apa pun. Jaminan dan deposit kembali saat Anda melepas nama.";
 "A hidden commit goes on chain first. Nobody can see which name it is for." = "Komitmen tersembunyi dikirim ke chain terlebih dahulu. Tidak ada yang bisa melihat untuk nama apa.";
-"About a minute later KaChat registers the name by itself. Keep the app open; if you leave, it continues next time." = "Sekitar satu menit kemudian KaChat mendaftarkan nama sendiri. Biarkan aplikasi terbuka; jika Anda keluar, prosesnya berlanjut lain kali.";
+"About a minute later KaPay registers the name by itself. Keep the app open; if you leave, it continues next time." = "Sekitar satu menit kemudian KaPay mendaftarkan nama sendiri. Biarkan aplikasi terbuka; jika Anda keluar, prosesnya berlanjut lain kali.";
 "The name is yours for the years you paid. Renew it any time before it expires." = "Nama menjadi milik Anda selama tahun yang Anda bayar. Perpanjang kapan saja sebelum kedaluwarsa.";
 "How claiming works" = "Cara kerja klaim";
 "Claim %@.kachat" = "Klaim %@.kachat";
@@ -1112,8 +1112,8 @@
 "Passphrase" = "Frasa sandi";
 
 /* Addresses of the other network are refused (IOS-003) */
-"This is a Testnet address. KaChat is on Mainnet." = "Ini alamat Testnet. KaChat sedang di Mainnet.";
-"This is a Mainnet address. KaChat is on Testnet." = "Ini alamat Mainnet. KaChat sedang di Testnet.";
+"This is a Testnet address. KaPay is on Mainnet." = "Ini alamat Testnet. KaPay sedang di Mainnet.";
+"This is a Mainnet address. KaPay is on Testnet." = "Ini alamat Mainnet. KaPay sedang di Testnet.";
 
 /* Siri / Shortcuts payments are confirmed (IOS-021) */
 "Send %@ to %@?" = "Kirim %1$@ ke %2$@?";
@@ -1173,7 +1173,7 @@
 
 /* .kachat registration progress half sheet */
 "Claiming %@" = "Mengklaim %@";
-"Keep KaChat open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back." = "Biarkan KaChat tetap terbuka: nama didaftarkan sekitar satu menit setelah komitmen tersembunyi dikonfirmasi. Jika Anda keluar, proses berlanjut dari titik terakhir saat Anda kembali.";
+"Keep KaPay open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back." = "Biarkan KaPay tetap terbuka: nama didaftarkan sekitar satu menit setelah komitmen tersembunyi dikonfirmasi. Jika Anda keluar, proses berlanjut dari titik terakhir saat Anda kembali.";
 "Finish the name you're claiming first." = "Selesaikan dulu nama yang sedang Anda klaim.";
 
 /* .kachat name lapsed: moved to Reclaimable */
@@ -1212,7 +1212,7 @@
 "How many words is the seed phrase you're importing?" = "Berapa jumlah kata frasa pemulihan yang Anda impor?";
 "What is this?" = "Apa ini?";
 "What is a seed phrase?" = "Apa itu frasa pemulihan?";
-"Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaChat." = "Siapa pun yang memiliki kata-kata ini dapat mengambil semua isi akun Anda. Jika Anda kehilangannya dan juga kehilangan perangkat ini, tidak ada yang bisa mengembalikan akun Anda, bahkan KaChat.";
+"Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaPay." = "Siapa pun yang memiliki kata-kata ini dapat mengambil semua isi akun Anda. Jika Anda kehilangannya dan juga kehilangan perangkat ini, tidak ada yang bisa mengembalikan akun Anda, bahkan KaPay.";
 "Write the words on paper, in order, and keep them somewhere safe and private. Never type them into a website, send them in a chat, or keep them in a screenshot or cloud notes." = "Tulis kata-katanya di kertas secara berurutan dan simpan di tempat yang aman dan pribadi. Jangan pernah mengetiknya di situs web, mengirimnya lewat chat, atau menyimpannya di tangkapan layar atau catatan cloud.";
 "12 words are already very secure. 24 words add even more protection." = "12 kata sudah sangat aman. 24 kata menambah perlindungan lebih lagi.";
 
@@ -1259,7 +1259,7 @@
 "Save a Kaspa address with a name you'll recognize." = "Simpan alamat Kaspa dengan nama yang Anda kenali.";
 "Add to Address Book" = "Tambahkan ke Buku Alamat";
 "Search names and addresses" = "Cari nama dan alamat";
-"Save the Kaspa addresses you use with a name you'll recognize. They stay in KaChat, for this wallet only, and never go into your phone's Contacts." = "Simpan alamat Kaspa yang Anda pakai dengan nama yang mudah dikenali. Alamat itu tetap di KaChat, hanya untuk dompet ini, dan tidak pernah masuk ke Kontak ponsel Anda.";
+"Save the Kaspa addresses you use with a name you'll recognize. They stay in KaPay, for this wallet only, and never go into your phone's Contacts." = "Simpan alamat Kaspa yang Anda pakai dengan nama yang mudah dikenali. Alamat itu tetap di KaPay, hanya untuk dompet ini, dan tidak pernah masuk ke Kontak ponsel Anda.";
 "Copied" = "Disalin";
 "Share Address" = "Bagikan Alamat";
 "Edit" = "Edit";
@@ -1267,7 +1267,7 @@
 "Delete %@ from your Address Book?" = "Hapus %@ dari Buku Alamat Anda?";
 "Not in your Address Book" = "Tidak ada di Buku Alamat Anda";
 "Note (optional)" = "Catatan (opsional)";
-"Saved in KaChat for this wallet only. Never added to your phone's Contacts." = "Disimpan di KaChat hanya untuk dompet ini. Tidak pernah ditambahkan ke Kontak ponsel Anda.";
+"Saved in KaPay for this wallet only. Never added to your phone's Contacts." = "Disimpan di KaPay hanya untuk dompet ini. Tidak pernah ditambahkan ke Kontak ponsel Anda.";
 "Remove from Address Book" = "Hapus dari Buku Alamat";
 "Edit Address" = "Edit Alamat";
 "Add addresses in Kaspa Hub > Address Book." = "Tambahkan alamat di Kaspa Hub > Buku Alamat.";
@@ -1324,10 +1324,10 @@
 "Claiming sends two transactions: the commit now, the registration about a minute later. Both use this speed." = "Klaim mengirim dua transaksi: commit sekarang, pendaftaran sekitar satu menit kemudian. Keduanya memakai kecepatan ini.";
 "Sent to the network" = "Dikirim ke jaringan";
 "In a block" = "Di dalam blok";
-"Updated in KaChat" = "Diperbarui di KaChat";
+"Updated in KaPay" = "Diperbarui di KaPay";
 "Waiting for the network to put it in a block. Usually a few seconds; longer when it's busy." = "Menunggu jaringan memasukkannya ke blok. Biasanya beberapa detik; lebih lama saat sibuk.";
-"It's in a block. Updating KaChat..." = "Sudah di dalam blok. Memperbarui KaChat...";
-"Done. It shows in KaChat now." = "Selesai. Sekarang tampil di KaChat.";
+"It's in a block. Updating KaPay..." = "Sudah di dalam blok. Memperbarui KaPay...";
+"Done. It shows in KaPay now." = "Selesai. Sekarang tampil di KaPay.";
 "The network hasn't taken it. Nothing was spent if it never lands - try again with a faster fee." = "Jaringan belum menerimanya. Jika tidak pernah masuk, tidak ada yang terpakai - coba lagi dengan biaya lebih cepat.";
 "Tap the transaction to open it in the explorer." = "Ketuk transaksi untuk membukanya di explorer.";
 
@@ -1338,8 +1338,8 @@
 "Tap an offer to accept or decline it. Expired offers go back to their buyers." = "Ketuk penawaran untuk menerima atau menolaknya. Penawaran yang kedaluwarsa kembali ke pembelinya.";
 
 /* Audit run 3: Address Book network checks, .kachat fee re-check */
-"Every address in that file is a Mainnet address. KaChat is on Testnet." = "Semua alamat dalam file itu adalah alamat Mainnet. KaChat ada di Testnet.";
-"Every address in that file is a Testnet address. KaChat is on Mainnet." = "Semua alamat dalam file itu adalah alamat Testnet. KaChat ada di Mainnet.";
+"Every address in that file is a Mainnet address. KaPay is on Testnet." = "Semua alamat dalam file itu adalah alamat Mainnet. KaPay ada di Testnet.";
+"Every address in that file is a Testnet address. KaPay is on Mainnet." = "Semua alamat dalam file itu adalah alamat Testnet. KaPay ada di Mainnet.";
 "Skipped %lld from the other network." = "%lld dari jaringan lain dilewati.";
 "The network fee went up to %@ since you confirmed. Nothing was sent. Check the new fee and confirm again." = "Biaya jaringan naik menjadi %@ sejak Anda mengonfirmasi. Tidak ada yang dikirim. Periksa biaya baru dan konfirmasi lagi.";
 
@@ -1396,7 +1396,7 @@
 
 /* .kachat: combining many small coins before a name transaction */
 "Your KAS is in many small coins. Combining them into one first..." = "KAS Anda tersebar di banyak koin kecil. Koin-koin itu digabung jadi satu dulu...";
-"Your KAS is in many small coins. KaChat combines them into one before registering, for a tiny extra network fee." = "KAS Anda tersebar di banyak koin kecil. KaChat menggabungkannya jadi satu sebelum mendaftar, dengan biaya jaringan tambahan yang sangat kecil.";
+"Your KAS is in many small coins. KaPay combines them into one before registering, for a tiny extra network fee." = "KAS Anda tersebar di banyak koin kecil. KaPay menggabungkannya jadi satu sebelum mendaftar, dengan biaya jaringan tambahan yang sangat kecil.";
 
 /* .kachat mainnet launch countdown */
 "Names open in" = "Nama dibuka dalam";
@@ -1452,7 +1452,7 @@
 "Send Payment Request" = "Kirim Permintaan Pembayaran";
 
 /* .kachat transaction sheet: coins are combined only after the slide (IOS-075) */
-"Your KAS is in many small coins. When you slide, KaChat first combines them into one (a separate transaction with its own small fee), then sends this." = "KAS Anda tersebar di banyak koin kecil. Saat Anda menggeser, KaChat lebih dulu menggabungkannya menjadi satu (transaksi terpisah dengan biaya kecilnya sendiri), lalu mengirim ini.";
+"Your KAS is in many small coins. When you slide, KaPay first combines them into one (a separate transaction with its own small fee), then sends this." = "KAS Anda tersebar di banyak koin kecil. Saat Anda menggeser, KaPay lebih dulu menggabungkannya menjadi satu (transaksi terpisah dengan biaya kecilnya sendiri), lalu mengirim ini.";
 
 /* An address's Domains tab: one card per name service */
 "No %@ names on this address." = "Tidak ada nama %@ di alamat ini.";
@@ -1559,7 +1559,7 @@
 "Recovery Phrase Needed" = "Perlu frasa pemulihan";
 "Enter Recovery Phrase" = "Masukkan Frasa Pemulihan";
 "%@ is on this iPhone, but its keys are not. That happens after restoring from a backup, because keys are locked to the phone they were made on. Enter the account's recovery phrase to sign in. Its history on this phone is kept." = "%@ ada di iPhone ini, tetapi kuncinya tidak. Itu terjadi setelah memulihkan dari cadangan, karena kunci terikat pada ponsel tempat kunci itu dibuat. Masukkan frasa pemulihan akun ini untuk masuk. Riwayatnya di ponsel ini tetap tersimpan.";
-"This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaChat's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here. Your messages on this device are kept." = "iPhone ini punya akun Anda, tetapi tidak kuncinya. Itu terjadi setelah memulihkan ponsel dari cadangan, karena kunci KaChat terikat pada perangkat tempat kunci itu dibuat. Masukkan frasa pemulihan Anda untuk membukanya di sini. Pesan Anda di perangkat ini tetap tersimpan.";
+"This iPhone has your account but not its keys. That happens after restoring a phone from a backup, because KaPay's keys are locked to the device they were created on. Enter your recovery phrase to unlock it here." = "iPhone ini punya akun Anda, tetapi tidak kuncinya. Itu terjadi setelah memulihkan ponsel dari cadangan, karena kunci KaPay terikat pada perangkat tempat kunci itu dibuat. Masukkan frasa pemulihan Anda untuk membukanya di sini. Pesan Anda di perangkat ini tetap tersimpan.";
 
 
 /* The chat list's name for the chat with yourself */

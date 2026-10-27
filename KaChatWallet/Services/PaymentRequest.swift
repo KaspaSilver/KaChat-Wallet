@@ -236,6 +236,16 @@ struct PaymentRequest: Equatable, Identifiable {
         return Data(SHA256.hash(data: Data(text.utf8)))
     }
 
+    /// This request signed by `creator` (the wallet's chatting address) with its key.
+    func signed(by creator: String, privateKey: Data) -> PaymentRequest? {
+        guard let schnorrKey = try? P256K.Schnorr.PrivateKey(dataRepresentation: privateKey) else { return nil }
+        var message = [UInt8](signingDigest(creator: creator))
+        guard let signature = try? schnorrKey.signature(message: &message, auxiliaryRand: nil) else { return nil }
+        return PaymentRequest(address: address, amountSompi: amountSompi, memo: memo,
+                              toChattingAddress: toChattingAddress, creator: creator.lowercased(),
+                              signature: Data(signature.bytes))
+    }
+
     /// True when `signature` is `creator`'s over this request.
     static func verify(_ signature: Data, creator: String, request: PaymentRequest) -> Bool {
         guard let key = KaspaAddress.publicKey(from: creator), key.count == 32 else { return false }

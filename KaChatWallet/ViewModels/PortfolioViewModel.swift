@@ -1206,7 +1206,7 @@ final class PortfolioViewModel: ObservableObject {
     /// Fee Currency are written as zero/USD — the ledger doesn't keep fee as a separate line
     /// item; any fee captured at import time is already folded into Total value (USD).
     /// The export's file name: the name you gave the portfolio in the app ("Long Term 2026-10-08…
-    /// .csv"), so it is recognizable in Files and Nextcloud; "KaChat Portfolio" if it has none.
+    /// .csv"), so it is recognizable in Files and Nextcloud; "KaPay Portfolio" if it has none.
     /// Characters a file name can't hold are dropped.
     static func exportBaseName() -> String {
         let manager = PortfolioManager.shared
@@ -1215,7 +1215,7 @@ final class PortfolioViewModel: ObservableObject {
         let cleaned = name.unicodeScalars.filter { !banned.contains($0) }
             .map(String.init).joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? "KaChat Portfolio" : String(cleaned.prefix(60))
+        return cleaned.isEmpty ? "KaPay Portfolio" : String(cleaned.prefix(60))
     }
 
     func exportCsvURL() -> URL? {

@@ -68,8 +68,17 @@ struct ProfileView: View {
     @ObservedObject private var notifCenter = GlobalNotificationCenter.shared
     /// Donate: the Send screen, addressed to KaChat's donation address
     @State private var showDonateSheet = false
-    /// The floating up-arrow button: Send Kaspa, nothing filled in.
-    @State private var showSendKaspa = false
+    /// The floating up/down-arrow button's half sheet: Send Kaspa, Receive Kaspa, Request
+    /// Payment - as in KaChat.
+    @State private var showWalletActions = false
+    /// The tile tapped in that sheet, opened once the sheet is down (a sheet can't present while
+    /// another is still going down).
+    @State private var pendingWalletAction: WalletAction?
+    @State private var walletAction: WalletAction?
+    private enum WalletAction: String, Identifiable {
+        case send, receive, request
+        var id: String { rawValue }
+    }
     private static let donateName = "kachat.kachat"
     /// The address Donate pays, pinned (IOS-067): a name is first-come, so resolving
     /// `kachat.kachat` would pay whoever registered it. This is the address `kachat.kas` has
@@ -88,13 +97,14 @@ struct ProfileView: View {
         ProfileQRCodeCache.preload(address: address, completion: nil)
     }
 
-    /// The floating glass up arrow in the bottom-right corner, opening Send Kaspa.
+    /// The floating glass up/down arrow in the bottom-right corner, as in KaChat: a half sheet
+    /// with Send Kaspa, Receive Kaspa and Request Payment.
     private var sendKaspaButton: some View {
         Button {
             Haptics.impact(.light)
-            showSendKaspa = true
+            showWalletActions = true
         } label: {
-            Image(systemName: "arrow.up")
+            Image(systemName: "arrow.up.arrow.down")
                 .font(.scaled(size: 22, weight: .semibold))
                 .foregroundColor(.accentColor)
                 .frame(width: 56, height: 56)
@@ -107,7 +117,41 @@ struct ProfileView: View {
         }
         .padding(.trailing, 20)
         .padding(.bottom, 16)
-        .accessibilityLabel(Text("Send Kaspa"))
+        .accessibilityLabel(Text("Send and Receive"))
+    }
+
+    /// The floating button's half sheet: the three wallet actions as tiles.
+    private var walletActionsSheet: some View {
+        let columns = Array(repeating: GridItem(.fixed(WalletActionTile.size), spacing: 14), count: 3)
+        return VStack(spacing: 16) {
+            Text("Send and Receive")
+                .font(.headline)
+                .padding(.top, 20)
+
+            LazyVGrid(columns: columns, spacing: 14) {
+                WalletActionTile(title: "Send Kaspa", hint: "Send Kaspa from any of your addresses.", systemImage: "arrow.up.circle") {
+                    closeWalletActions(then: .send)
+                }
+                WalletActionTile(title: "Receive Kaspa", hint: "Show a fresh address to get paid.", systemImage: "arrow.down.circle") {
+                    closeWalletActions(then: .receive)
+                }
+                WalletActionTile(title: "Request Payment", hint: "A link asking for an exact amount, with what it's for.", systemImage: "doc.text") {
+                    closeWalletActions(then: .request)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.height(262)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func closeWalletActions(then action: WalletAction) {
+        pendingWalletAction = action
+        showWalletActions = false
     }
 
     var body: some View {
@@ -154,7 +198,7 @@ struct ProfileView: View {
             // slot - identical to what the bar showed mid-scroll before.
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack(spacing: 12) {
-                    // KaChat Wallet: this screen is the "Wallet" tab.
+                    // KaPay: this screen is the "Wallet" tab.
                     Text("Wallet")
                         .font(.largeTitle.weight(.bold))
                     profileShareButton
@@ -274,9 +318,31 @@ struct ProfileView: View {
                     sendKaspaButton
                 }
             }
-            .sheet(isPresented: $showSendKaspa) {
-                if let wallet = walletManager.currentWallet {
-                    WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi)
+            .sheet(isPresented: $showWalletActions, onDismiss: {
+                walletAction = pendingWalletAction
+                pendingWalletAction = nil
+            }) {
+                walletActionsSheet
+            }
+            .sheet(item: $walletAction) { action in
+                switch action {
+                case .send:
+                    if let wallet = walletManager.currentWallet {
+                        WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi)
+                    }
+                case .receive:
+                    NavigationStack {
+                        ReceiveKaspaQRView()
+                            .navigationTitle("Receive Kaspa")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .confirmationAction) {
+                                    Button("Done") { walletAction = nil }
+                                }
+                            }
+                    }
+                case .request:
+                    CreatePaymentRequestView()
                 }
             }
             .sheet(isPresented: $showAddressBook) {

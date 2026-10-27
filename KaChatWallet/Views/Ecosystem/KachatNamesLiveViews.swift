@@ -631,16 +631,9 @@ struct KachatTxDoneSheet: View {
                     .padding(.top, 12)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                step("Sent to the network", done: true)
-                step("In a block", done: inBlock, active: !inBlock && stage != .dropped)
-                step("Updated in KaChat", done: stage == .shown, active: stage == .accepted)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(sendKaspaGlass(cornerRadius: 16))
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
+            KachatTxStageSteps(txId: done.txId, accepted: done.accepted)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
 
             Button {
                 browserURL = explorerURL
@@ -704,10 +697,34 @@ struct KachatTxDoneSheet: View {
     private var stageText: LocalizedStringKey {
         switch stage {
         case .sent, .inMempool: return "Waiting for the network to put it in a block. Usually a few seconds; longer when it's busy."
-        case .accepted: return "It's in a block. Updating KaChat..."
-        case .shown: return "Done. It shows in KaChat now."
+        case .accepted: return "It's in a block. Updating KaPay..."
+        case .shown: return "Done. It shows in KaPay now."
         case .dropped: return "The network hasn't taken it. Nothing was spent if it never lands - try again with a faster fee."
         }
+    }
+
+}
+
+/// A name transaction's progress, followed on a node: sent, in a block, showing in KaPay. In the
+/// receipt half sheet and on the swipe-up screen after a purchase.
+struct KachatTxStageSteps: View {
+    let txId: String
+    /// Already known to be in a block.
+    var accepted = false
+    @ObservedObject private var actions = KachatNamesActions.shared
+
+    private var stage: KachatNamesActions.TxStage { actions.txStages[txId] ?? (accepted ? .shown : .sent) }
+    private var inBlock: Bool { stage == .accepted || stage == .shown }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            step("Sent to the network", done: true)
+            step("In a block", done: inBlock, active: !inBlock && stage != .dropped)
+            step("Updated in KaPay", done: stage == .shown, active: stage == .accepted)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(sendKaspaGlass(cornerRadius: 16))
     }
 
     private func step(_ title: LocalizedStringKey, done: Bool, active: Bool = false) -> some View {
@@ -751,7 +768,7 @@ struct KachatRegistrationProgressSheet: View {
                         .padding(.top, 22)
                     KachatRegistrationCard(registration: registration)
                     if registration.needsDriving {
-                        Text("Keep KaChat open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back.")
+                        Text("Keep KaPay open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -833,7 +850,7 @@ struct KachatClaimsListSheet: View {
                     ForEach(actions.openRegistrations) { registration in
                         KachatRegistrationCard(registration: registration)
                     }
-                    Text("Keep KaChat open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back.")
+                    Text("Keep KaPay open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -928,7 +945,7 @@ struct KachatRegistrationCard: View {
             if registration.commitDaa == nil {
                 Text("Waiting for the commit to confirm...")
             } else {
-                Text("The commit has to age for about a minute before the name can be registered. Keep KaChat open - it registers by itself, and picks up where it left off if you leave.")
+                Text("The commit has to age for about a minute before the name can be registered. Keep KaPay open - it registers by itself, and picks up where it left off if you leave.")
             }
         case .registering: Text("Registering...")
         case .registered: Text("Registered. It's yours.")
@@ -1649,6 +1666,9 @@ struct KachatTxSheet<Inputs: View>: View {
     /// Shown as a step of a flow that already has its NavigationStack (Renew's "How long?" first):
     /// no stack of its own, and Back, not Cancel, leads back.
     var embedded = false
+    /// Confirm with a swipe up, like Send Kaspa, instead of the slider: the screen goes up into
+    /// the BlockDAG, then shows the transaction and its progress (or Failed with Try Again).
+    var swipeUp: KachatSwipeUp? = nil
     @ViewBuilder var inputs: () -> Inputs
 
     @Environment(\.dismiss) private var dismiss
@@ -1699,8 +1719,79 @@ struct KachatTxSheet<Inputs: View>: View {
         }
     }
 
+    @ViewBuilder
     private var content: some View {
-        ScrollView {
+        if let swipeUp {
+            SwipeUpToSendScrollView(
+                screenTitle: swipeUp.screenTitle,
+                onCancel: { dismiss() },
+                title: swipeUp.bar,
+                isBusy: sending,
+                isEnabled: plan != nil && !building && txId == nil,
+                amountSompi: spentSompi,
+                recipient: swipeUp.recipient,
+                sent: txId.map { SentTransaction(txId: $0, amountSompi: spentSompi, recipient: swipeUp.recipient) },
+                failureMessage: sendError,
+                labels: swipeUp.labels,
+                outcome: txId.map { AnyView(KachatTxStageSteps(txId: $0)) },
+                onDone: { dismiss() },
+                action: { authorize() }
+            ) {
+                form
+            }
+            .modifier(planTasks)
+        } else {
+            ScrollView { form }
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle(title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    // embedded: the flow's Back leads out until it's sent
+                    if !embedded || txId != nil {
+                        ToolbarItem(placement: txId == nil ? .cancellationAction : .confirmationAction) {
+                            Button { dismiss() } label: {
+                                if txId == nil { Text("Cancel") } else { Text("Done") }
+                            }
+                        }
+                    }
+                }
+                .modifier(planTasks)
+                .sheet(item: $done, onDismiss: { dismiss() }) { KachatTxDoneSheet(done: $0) }
+        }
+    }
+
+    /// What leaves the wallet: everything the transaction spends from it less what comes back.
+    private var spentSompi: UInt64? {
+        guard let plan, let payer else { return nil }
+        return UInt64(max(0, -Self.balanceChange(plan, me: payer.key)))
+    }
+
+    private var planTasks: KachatTxPlanTasks {
+        KachatTxPlanTasks(
+            operationKey: operationKey, feeKey: "\(feeTier.rawValue)|\(customFee ?? 0)",
+            rebuild: { await rebuild() },
+            loadPayer: {
+                payerInfo = operation.flatMap { actions.payer(for: $0) }.map { KachatPayerInfo(address: $0.address, key: $0.key) }
+                guard let address = payerInfo?.address, address != actions.myAddress else { return }
+                let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([address])) ?? []
+                payerBalance = utxos.reduce(UInt64(0)) { $0 + $1.amount }
+            },
+            startOnBusyNetwork: {
+                // A busy network starts on Fast unless the person already chose.
+                if let estimate = await actions.refreshFeeEstimate(), estimate.isBusy, !feeTouched, customFee == nil {
+                    feeTier = .fast
+                }
+            },
+            feeTier: feeTier,
+            onFeeTierChange: {
+                // a speed replaces a typed fee
+                feeTouched = true
+                customFee = nil
+            }
+        )
+    }
+
+    private var form: some View {
             VStack(spacing: 16) {
                 if !rows.isEmpty || (plan?.priceFee ?? 0) > 0 {
                     KachatCard {
@@ -1785,14 +1876,16 @@ struct KachatTxSheet<Inputs: View>: View {
 
                 if combinesCoins, plan != nil, txId == nil {
                     Label {
-                        Text("Your KAS is in many small coins. When you slide, KaChat first combines them into one (a separate transaction with its own small fee), then sends this.")
+                        Text(swipeUp == nil
+                             ? "Your KAS is in many small coins. When you slide, KaPay first combines them into one (a separate transaction with its own small fee), then sends this."
+                             : "Your KAS is in many small coins. When you swipe, KaPay first combines them into one (a separate transaction with its own small fee), then sends this.")
                     } icon: { Image(systemName: "square.stack.3d.up") }
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                if txId == nil {
+                if txId == nil, swipeUp == nil {
                     // The slide is the confirmation: no second prompt, even for the destructive ones
                     // (their warning is the red card above).
                     SendActionButton(title: confirmTitle, isBusy: sending, isEnabled: plan != nil && !building) {
@@ -1808,39 +1901,6 @@ struct KachatTxSheet<Inputs: View>: View {
                 }
             }
             .padding(16)
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            // embedded: the flow's Back leads out until it's sent
-            if !embedded || txId != nil {
-                ToolbarItem(placement: txId == nil ? .cancellationAction : .confirmationAction) {
-                    Button { dismiss() } label: {
-                        if txId == nil { Text("Cancel") } else { Text("Done") }
-                    }
-                }
-            }
-        }
-        .task(id: "\(operationKey)|\(feeTier.rawValue)|\(customFee ?? 0)") { await rebuild() }
-        .task(id: operationKey) {
-            payerInfo = operation.flatMap { actions.payer(for: $0) }.map { KachatPayerInfo(address: $0.address, key: $0.key) }
-            guard let address = payerInfo?.address, address != actions.myAddress else { return }
-            let utxos = (try? await NodePoolService.shared.getUtxosByAddresses([address])) ?? []
-            payerBalance = utxos.reduce(UInt64(0)) { $0 + $1.amount }
-        }
-        .task {
-            // A busy network starts on Fast unless the person already chose.
-            if let estimate = await actions.refreshFeeEstimate(), estimate.isBusy, !feeTouched, customFee == nil {
-                feeTier = .fast
-            }
-        }
-        .onChange(of: feeTier) { _ in
-            // a speed replaces a typed fee
-            feeTouched = true
-            customFee = nil
-        }
-        .sheet(item: $done, onDismiss: { dismiss() }) { KachatTxDoneSheet(done: $0) }
     }
 
     private func rebuild() async {
@@ -1869,8 +1929,17 @@ struct KachatTxSheet<Inputs: View>: View {
     }
 
     private func authorize() {
+        // swipe-up: busy at once, since its screen is already sending through the device check
+        if swipeUp != nil {
+            sending = true
+            sendError = nil
+        }
         DeviceAuth.authenticate(reason: authReason) {
             Task { @MainActor in await send() }
+        } onFailure: {
+            guard swipeUp != nil else { return }
+            sendError = AppLocalization.string("Not confirmed on this device, so nothing was sent.")
+            sending = false
         }
     }
 
@@ -1886,9 +1955,11 @@ struct KachatTxSheet<Inputs: View>: View {
                 exactFeerate: planFeerate, maxNetworkFee: plan?.networkFee
             )
             txId = id
-            Haptics.success()
             onDone(id)
-            done = KachatTxDone(txId: id, title: doneTitle)
+            if swipeUp == nil {
+                Haptics.success()
+                done = KachatTxDone(txId: id, title: doneTitle)
+            }
         } catch {
             sendError = error.localizedDescription
             // the price or the fee moved: show the new plan so the person can confirm it
@@ -1913,12 +1984,42 @@ struct KachatTxSheet<Inputs: View>: View {
     }
 }
 
+/// How a `KachatTxSheet` confirms with a swipe up: the screen's title, the bar's words, what the
+/// sending screen says, and what it is for ("name.kachat").
+struct KachatSwipeUp {
+    let screenTitle: String
+    let bar: LocalizedStringKey
+    let labels: SwipeUpLabels
+    var recipient: String?
+}
+
+/// `KachatTxSheet`'s loading work, shared by its slider and swipe-up layouts: the plan for the
+/// chosen fee, who pays, and a busy network starting on Fast.
+private struct KachatTxPlanTasks: ViewModifier {
+    let operationKey: String
+    let feeKey: String
+    let rebuild: () async -> Void
+    let loadPayer: () async -> Void
+    let startOnBusyNetwork: () async -> Void
+    let feeTier: WithdrawFeeTier
+    let onFeeTierChange: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: "\(operationKey)|\(feeKey)") { await rebuild() }
+            .task(id: operationKey) { await loadPayer() }
+            .task { await startOnBusyNetwork() }
+            .onChange(of: feeTier) { _ in onFeeTierChange() }
+    }
+}
+
 extension KachatTxSheet where Inputs == EmptyView {
     init(title: LocalizedStringKey, confirmTitle: LocalizedStringKey, authReason: String, doneTitle: String = "Transaction sent",
          warning: LocalizedStringKey? = nil, footer: LocalizedStringKey? = nil, rows: [KachatTxRow] = [],
-         operation: KachatNamesActions.Operation?, operationKey: String, onDone: @escaping (String) -> Void = { _ in }) {
+         operation: KachatNamesActions.Operation?, operationKey: String, onDone: @escaping (String) -> Void = { _ in },
+         swipeUp: KachatSwipeUp? = nil) {
         self.init(title: title, confirmTitle: confirmTitle, authReason: authReason, doneTitle: doneTitle, warning: warning, footer: footer,
-                  rows: rows, operation: operation, operationKey: operationKey, onDone: onDone, inputs: { EmptyView() })
+                  rows: rows, operation: operation, operationKey: operationKey, onDone: onDone, swipeUp: swipeUp, inputs: { EmptyView() })
     }
 }
 
@@ -1948,8 +2049,8 @@ struct KachatClaimSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var actions = KachatNamesActions.shared
-    /// Once the registration started, this sheet becomes its progress half sheet - from the
-    /// marketplace and from Your Domains alike. Swiping it away leaves the claim running.
+    /// Once the registration started, the swipe-up screen shows its progress - from the
+    /// marketplace and from Your Domains alike. Closing it leaves the claim running.
     @State private var progressId: String?
     @State private var detent: PresentationDetent = .large
     @State private var years: Int64 = 1
@@ -1967,19 +2068,30 @@ struct KachatClaimSheet: View {
     private var maxYears: Int64 { KachatNamesService.shared.manifest?.params.maxYears ?? 2 }
 
     var body: some View {
-        Group {
-            if let progressId {
-                KachatRegistrationProgressSheet(registrationId: progressId) { dismiss() }
-            } else {
-                claimForm
-            }
-        }
-        .presentationDetents([.medium, .large], selection: $detent)
+        claimForm
+            .presentationDetents([.medium, .large], selection: $detent)
     }
 
+    /// Swipe up to claim, like Send Kaspa: the screen goes up into the BlockDAG while the commit
+    /// goes out, then shows the claim's progress (`KachatRegistrationCard`).
     private var claimForm: some View {
         NavigationStack {
-            ScrollView {
+            SwipeUpToSendScrollView(
+                screenTitle: AppLocalization.string("Claim Name"),
+                onCancel: { dismiss() },
+                title: "Swipe up to Claim",
+                isBusy: starting,
+                isEnabled: quote?.affordable == true,
+                amountSompi: quote?.total,
+                recipient: "\(target.name).kachat",
+                sent: nil,
+                failureMessage: startError,
+                labels: .claim,
+                succeeded: progressId != nil,
+                outcome: progressId.map { AnyView(KachatClaimOutcome(registrationId: $0)) },
+                onDone: { dismiss() },
+                action: authorizeAndStart
+            ) {
                 VStack(spacing: 16) {
                     KachatCard {
                         HStack {
@@ -2064,7 +2176,7 @@ struct KachatClaimSheet: View {
                             Spacer(minLength: 0)
                         }
                         if q.combinesCoins, q.affordable {
-                            Label("Your KAS is in many small coins. KaChat combines them into one before registering, for a tiny extra network fee.", systemImage: "arrow.triangle.merge")
+                            Label("Your KAS is in many small coins. KaPay combines them into one before registering, for a tiny extra network fee.", systemImage: "arrow.triangle.merge")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2076,7 +2188,7 @@ struct KachatClaimSheet: View {
                             .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
                         stepRow(1, "A hidden commit goes on chain first. Nobody can see which name it is for.")
-                        stepRow(2, "About a minute later KaChat registers the name by itself. Keep the app open; if you leave, it continues next time.")
+                        stepRow(2, "About a minute later KaPay registers the name by itself. Keep the app open; if you leave, it continues next time.")
                         if KachatLive.yearlyPeriods {
                             stepRow(3, "The name is yours for the years you paid, at most 2 ahead. A 1-year name can be extended to 2 years; from 10 days before it expires you can renew it.")
                         } else {
@@ -2096,16 +2208,6 @@ struct KachatClaimSheet: View {
                     .font(.footnote)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    SendActionButton(
-                        title: "Claim \(target.name).kachat",
-                        isBusy: starting,
-                        isEnabled: quote?.affordable == true
-                    ) {
-                        DeviceAuth.authenticate(reason: KachatLive.authReason) {
-                            Task { @MainActor in await start() }
-                        }
-                    }
-                    .padding(.top, 4)
                     if let startError {
                         Text(verbatim: startError)
                             .font(.footnote)
@@ -2114,11 +2216,6 @@ struct KachatClaimSheet: View {
                     }
                 }
                 .padding(16)
-            }
-            .navigationTitle("Claim Name")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             }
             .task(id: "\(years)|\(feeTier.rawValue)") {
                 quote = nil
@@ -2156,21 +2253,59 @@ struct KachatClaimSheet: View {
         }
     }
 
+    /// The swipe let go: busy at once (the swipe screen is already sending), then the device
+    /// check, then the commit.
+    private func authorizeAndStart() {
+        starting = true
+        startError = nil
+        DeviceAuth.authenticate(reason: KachatLive.authReason) {
+            Task { @MainActor in await start() }
+        } onFailure: {
+            startError = AppLocalization.string("Not confirmed on this device, so nothing was sent.")
+            starting = false
+        }
+    }
+
     private func start() async {
         // the price shown is the most the registration will ever pay
-        guard let q = quote, q.years == years else { return }
+        guard let q = quote, q.years == years else {
+            startError = AppLocalization.string("The price changed. Check it and swipe again.")
+            starting = false
+            return
+        }
         starting = true
         startError = nil
         do {
             try await KachatNamesActions.shared.startRegistration(name: target.name, years: years, maxPrice: q.price, feeTier: feeTier)
-            Haptics.success()
             onStarted()
             progressId = actions.pending.last(where: { $0.name == target.name && $0.isOpen })?.id
-            if progressId == nil { dismiss() } else { detent = .medium }
+            // no registration to follow (it finished at once): nothing left to show
+            if progressId == nil { dismiss() }
         } catch {
             startError = error.localizedDescription
         }
         starting = false
+    }
+}
+
+/// A started claim's progress, under "Claim Started" on the swipe-up screen: the registration's
+/// own card, and why the app should stay open until the name registers.
+private struct KachatClaimOutcome: View {
+    let registrationId: String
+    @ObservedObject private var actions = KachatNamesActions.shared
+
+    var body: some View {
+        if let registration = actions.pending.first(where: { $0.id == registrationId }) {
+            VStack(spacing: 12) {
+                KachatRegistrationCard(registration: registration)
+                if registration.needsDriving {
+                    Text("Keep KaPay open: the name is registered about a minute after the hidden commit confirms. If you leave, it picks up where it left off when you come back.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+        }
     }
 }
 
@@ -2745,7 +2880,13 @@ struct KachatLiveBuySheet: View {
             footer: soon ? "Less than \(KachatLive.duration(soonMs)) is left before this name expires. You'd have to renew it soon." : "The payment reaches the seller and the name reaches you in the same transaction - both happen, or neither does.",
             rows: [.init(title: "Name", value: info.display), .init(title: "Price (to the seller)", value: KaspaUnit.amount(info.price)),
                    .init(title: "Expires", value: KachatLive.day(info.expiresAt))],
-            operation: .buy(info), operationKey: "buy-\(KachatNames.hex(info.outpoint.txid))"
+            operation: .buy(info), operationKey: "buy-\(KachatNames.hex(info.outpoint.txid))",
+            swipeUp: KachatSwipeUp(
+                screenTitle: AppLocalization.string("Buy Name"),
+                bar: "Swipe up to Buy",
+                labels: .buy,
+                recipient: info.display
+            )
         )
     }
 

@@ -660,6 +660,38 @@ enum SendFailureSimulation {
 
 // MARK: - Swipe up to send
 
+/// The words a swipe-up screen uses: a Kaspa send by default, a .kachat claim with `.claim`.
+struct SwipeUpLabels {
+    var release: LocalizedStringKey = "Release to Send"
+    var working: LocalizedStringKey = "Sending"
+    var workingDetail: LocalizedStringKey = "Broadcasting to the Kaspa BlockDAG..."
+    var done: LocalizedStringKey = "Sent"
+    var hint: LocalizedStringKey = "Let go past halfway to send."
+    /// Before the recipient line: "to kaspa:..." or "for name.kachat".
+    var recipientWord = "to"
+    var failedFallback = "The send didn't go out."
+
+    static let send = SwipeUpLabels()
+    static let buy = SwipeUpLabels(
+        release: "Release to Buy",
+        working: "Buying",
+        workingDetail: "Sending the purchase to the Kaspa BlockDAG...",
+        done: "Name Bought",
+        hint: "Let go past halfway to buy.",
+        recipientWord: "for",
+        failedFallback: "The purchase didn't go out."
+    )
+    static let claim = SwipeUpLabels(
+        release: "Release to Claim",
+        working: "Claiming",
+        workingDetail: "Committing to the Kaspa BlockDAG...",
+        done: "Claim Started",
+        hint: "Let go past halfway to claim.",
+        recipientWord: "for",
+        failedFallback: "The claim didn't start."
+    )
+}
+
 /// A send screen's scroll view with "Swipe up to Send" pinned at the bottom. Press the bar and
 /// drag it up: the whole screen moves up with the finger, and the send screen rises from below
 /// in its place. Letting go past halfway up sends: the send screen takes over the full screen,
@@ -685,6 +717,11 @@ struct SwipeUpToSendScrollView<Content: View>: View {
     let sent: SentTransaction?
     /// The screen's error for a send that failed, shown under "Failed".
     var failureMessage: String?
+    var labels: SwipeUpLabels = .send
+    /// For an action that ends without a `SentTransaction` (a .kachat claim): true once it
+    /// worked, and `outcome` shows under the title in place of the transaction.
+    var succeeded = false
+    var outcome: AnyView?
     /// The confirmation's Done.
     let onDone: () -> Void
     let action: () -> Void
@@ -726,8 +763,11 @@ struct SwipeUpToSendScrollView<Content: View>: View {
                         amountSompi: amountSompi,
                         recipient: recipient,
                         sent: dagShown ? sent : nil,
+                        done: dagShown && (sent != nil || succeeded),
+                        outcome: outcome,
+                        labels: labels,
                         failure: failed && dagShown
-                            ? (failureMessage ?? AppLocalization.string("The send didn't go out."))
+                            ? (failureMessage ?? AppLocalization.string(labels.failedFallback))
                             : nil,
                         isSending: phase == .sending,
                         armed: armed,
@@ -755,6 +795,12 @@ struct SwipeUpToSendScrollView<Content: View>: View {
         }
         .onChange(of: sent) { sent in
             if sent != nil {
+                confirmed = true
+                Haptics.success()
+            }
+        }
+        .onChange(of: succeeded) { ok in
+            if ok {
                 confirmed = true
                 Haptics.success()
             }
@@ -801,7 +847,7 @@ struct SwipeUpToSendScrollView<Content: View>: View {
         VStack(spacing: 6) {
             Image(systemName: armed ? "checkmark" : "chevron.up")
                 .font(.headline.weight(.bold))
-            Text(armed ? "Release to Send" : title)
+            Text(armed ? labels.release : title)
                 .font(.headline)
         }
         .foregroundColor(.black)
@@ -903,6 +949,10 @@ private struct SendProgressScreen: View {
     let recipient: String?
     /// Non-nil once confirmed.
     let sent: SentTransaction?
+    /// It worked: `sent` (with its transaction) or a screen's own `outcome`.
+    let done: Bool
+    let outcome: AnyView?
+    let labels: SwipeUpLabels
     /// Non-nil once the send failed: the error to show.
     let failure: String?
     /// False while the swipe is still being dragged (a preview of what's coming).
@@ -912,7 +962,7 @@ private struct SendProgressScreen: View {
     let onTryAgain: () -> Void
 
     /// Sent or failed: the DAG steps back and the outcome takes over.
-    private var finished: Bool { sent != nil || failure != nil }
+    private var finished: Bool { done || failure != nil }
 
     private var explorerURL: URL? {
         sent.flatMap { AppSettings.load().kaspaExplorer.txURL(for: $0.txId) }
@@ -933,7 +983,7 @@ private struct SendProgressScreen: View {
                 BlockDAGAnimationView(highlight: isSending && failure == nil)
                     .frame(height: 200)
                     .opacity(finished ? 0.35 : 1)
-                if sent != nil {
+                if done {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.scaled(size: 72, weight: .semibold))
                         .foregroundStyle(.black, Color.accentColor)
@@ -947,8 +997,8 @@ private struct SendProgressScreen: View {
             }
 
             VStack(spacing: 6) {
-                Text(sent != nil ? "Sent" : failure != nil ? "Failed"
-                     : (isSending ? "Sending" : (armed ? "Release to Send" : "Keep Swiping")))
+                Text(done ? labels.done : failure != nil ? "Failed"
+                     : (isSending ? labels.working : (armed ? labels.release : "Keep Swiping")))
                     .font(.largeTitle.weight(.bold))
                 if let amount = sent?.amountSompi ?? amountSompi {
                     Text(verbatim: kasText(amount))
@@ -956,7 +1006,7 @@ private struct SendProgressScreen: View {
                         .foregroundColor(.accentColor)
                 }
                 if let to = sent?.recipient ?? recipient, !to.isEmpty {
-                    Text("to \(to)")
+                    Text(verbatim: "\(AppLocalization.string(labels.recipientWord)) \(to)")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -964,7 +1014,7 @@ private struct SendProgressScreen: View {
                         .padding(.horizontal, 32)
                 }
                 if !finished {
-                    Text(isSending ? "Broadcasting to the Kaspa BlockDAG..." : "Let go past halfway to send.")
+                    Text(isSending ? labels.workingDetail : labels.hint)
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .padding(.top, 8)
@@ -1024,9 +1074,18 @@ private struct SendProgressScreen: View {
                 .transition(.opacity)
             }
 
+            if done, let outcome {
+                ScrollView {
+                    outcome
+                        .padding(.horizontal, 20)
+                }
+                .padding(.top, 20)
+                .transition(.opacity)
+            }
+
             Spacer(minLength: 0)
 
-            if sent != nil {
+            if done {
                 Button(action: onDone) {
                     Text("Done")
                         .font(.headline)

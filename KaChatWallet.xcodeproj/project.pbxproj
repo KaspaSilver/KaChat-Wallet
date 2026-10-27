@@ -194,7 +194,7 @@
 				DEVELOPMENT_TEAM = RP4Z22SFSD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KaChatWallet/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "KaChat Wallet";
+				INFOPLIST_KEY_CFBundleDisplayName = KaPay;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -229,7 +229,7 @@
 				DEVELOPMENT_TEAM = RP4Z22SFSD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KaChatWallet/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "KaChat Wallet";
+				INFOPLIST_KEY_CFBundleDisplayName = KaPay;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
