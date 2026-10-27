@@ -14,6 +14,8 @@ struct SettingsView: View {
     // ~15s after login, which was the scroll jank. The connection-status views are separate and
     // keep their own observation.
     @Environment(\.dismiss) private var dismiss
+    /// KaChat Wallet shows Settings as its own dock tab: no Done button there.
+    var isDockTab = false
 
     // Restore-from-backup state lives on this singleton (NOT view @State) so the restore Task
     // survives any view teardown; this view only presents the blocking modal and observes.
@@ -24,6 +26,7 @@ struct SettingsView: View {
 
     @State private var showSeedPhrase = false
     @State private var showDeleteConfirmation = false
+    @State private var showLogoutConfirmation = false
     @State private var showWipeIncomingConfirmation = false
     @State private var showResyncChatPicker = false
     /// Selection handed back by the chat picker sheet; the resync starts from the sheet's
@@ -90,7 +93,23 @@ struct SettingsView: View {
                 settingsCategoryRow("Danger Zone", icon: "exclamationmark.triangle", tint: .red) {
                     dangerZonePage
                 }
+                // Moved here from the Wallet tab (owner's call, 2026-10-27).
+                Section {
+                    Button(role: .destructive) {
+                        showLogoutConfirmation = true
+                    } label: {
+                        Label {
+                            Text("Log Out")
+                                .foregroundColor(.red)
+                        } icon: {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
             }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.large)
             .toast(message: toastMessage, style: toastStyle)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -99,14 +118,28 @@ struct SettingsView: View {
                 ToolbarItem(placement: .principal) {
                     balanceToolbarView
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
+                if !isDockTab {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            dismiss()
+                        }
                     }
                 }
             }
             .sheet(isPresented: $showSeedPhrase) {
                 SeedPhraseView()
+            }
+            // Half sheet rather than a confirmation dialog, matching every other chooser in the
+            // app - and it gives the consequence a row of its own beside the action.
+            .sheet(isPresented: $showLogoutConfirmation) {
+                ConfirmActionSheet(
+                    title: "Log Out",
+                    confirmTitle: "Log Out",
+                    confirmSubtitle: "Signs out of this account. Wallet and message data stay on this device.",
+                    confirmSystemImage: "rectangle.portrait.and.arrow.right"
+                ) {
+                    Task { await walletManager.logout() }
+                }
             }
             .sheet(isPresented: $showChatHistoryShareSheet, onDismiss: {
                 // The export is a temp file holding the whole chat history; once the share sheet

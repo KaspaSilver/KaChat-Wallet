@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository.
 
 KaChat Wallet is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
 1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, the .kachat names
-marketplace, Address Book and the whole account Profile (receive, addresses, domains, settings, help, log out, about).
+marketplace, Address Book and the whole account Profile (receive, addresses, domains, address book, help, about).
 
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `b603eb9f`
 (2026-10-24). Most of `KaChatWallet/` is still that code, including features the wallet never
@@ -23,9 +23,9 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`) - KaChat's Profile, labelled "Wallet" in the dock with KaPosts' wallet icon (`AppTab.profile`); Settings opens from here, and a floating up arrow (bottom right) opens Send Kaspa |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`) - KaChat's Profile, labelled "Wallet" in the dock with KaPosts' wallet icon (`AppTab.profile`); Address Book (`AddressBookView`, as a sheet) opens from here, and a floating up arrow (bottom right) opens Send Kaspa |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
-| Addresses | `AddressBookView` (`Views/Contacts/AddressBookView.swift`) - KaChat's Address Book, called "Addresses" |
+| Settings | `SettingsView(isDockTab: true)` (`Views/Settings/SettingsView.swift`, `AppTab.settings`) - no Done button as a tab; Log Out is its last row |
 
 Account setup is KaChat's: `ContentView` -> `OnboardingView` (create / import a seed) ->
 `MainTabView`. The sign-in screen says "KaChat Wallet" with the wallet logo and no tagline; KaChat's

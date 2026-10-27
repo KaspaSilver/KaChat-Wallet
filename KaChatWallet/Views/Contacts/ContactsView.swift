@@ -68,7 +68,7 @@ struct ProfileView: View {
     @State private var isSavingKNSProfile = false
     @State private var knsSaveProgressText: String?
     @State private var failedKNSUpdates: [KNSProfileFieldKey: String] = [:]
-    @State private var showSettings = false
+    @State private var showAddressBook = false
     @State private var showNotifCenter = false
     @ObservedObject private var notifCenter = GlobalNotificationCenter.shared
     /// Donate: the Send screen, addressed to KaChat's donation address
@@ -85,7 +85,6 @@ struct ProfileView: View {
         KaspaAddress.onActiveNetwork(donationAddressMainnet) ?? donationAddressMainnet
     }
     @State private var showOpenSourceLicenses = false
-    @State private var showLogoutConfirmation = false
     @State private var showWelcomeGuideReplay = false
     @State private var isEditingAccountName = false
     /// .kachat names of this wallet in their grace period: the banner at the top
@@ -134,9 +133,8 @@ struct ProfileView: View {
                         qrButtonsSection(wallet)
                         addressDropdownsSection(wallet)
                         yourDomainsSection
-                        settingsSection
+                        addressBookSection
                         helpSection
-                        logOutSection
                         aboutSection(wallet)
                         // room to scroll the last row out from under the floating send button
                         Color.clear.frame(height: 56)
@@ -287,8 +285,8 @@ struct ProfileView: View {
                     WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi)
                 }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
+            .sheet(isPresented: $showAddressBook) {
+                AddressBookView(showsDoneButton: true)
             }
             // Posted by the KaPosts profile's Edit KNS Profile button, which routes here rather
             // than rebuilding an editor this screen's state already drives.
@@ -601,15 +599,14 @@ struct ProfileView: View {
         await kachatRegistry.dropLapsed(from: names) { kachatOwnedCount = $0.count }
     }
 
-    /// Settings, as a card in the list rather than a glyph in the chrome - it belongs with the
-    /// other destinations you tap into from here (Your Domains, Help), and it is the entry point
-    /// to everything the app can be configured to do.
-    private var settingsSection: some View {
+    /// Address Book, as a card in the list - it moved here from the dock when Settings took its
+    /// slot (owner's call, 2026-10-27).
+    private var addressBookSection: some View {
         Button {
-            showSettings = true
+            showAddressBook = true
         } label: {
             HStack {
-                Label("Settings", systemImage: "gear")
+                Label("Address Book", systemImage: "book.closed")
                     .foregroundColor(.primary)
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -1463,40 +1460,6 @@ struct ProfileView: View {
         }
         .sheet(isPresented: $showOpenSourceLicenses) {
             OpenSourceLicensesView()
-        }
-    }
-
-    /// Moved here from Settings > Actions - Profile is where the rest of the account-level
-    /// actions (address management, About) already live, so Log Out belongs alongside them
-    /// rather than buried in Settings.
-    private var logOutSection: some View {
-        Button(role: .destructive) {
-            showLogoutConfirmation = true
-        } label: {
-            HStack {
-                Text("Log Out")
-                    .foregroundColor(.red)
-                Spacer()
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .foregroundColor(.red)
-            }
-            .padding(16)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(glassBackground(cornerRadius: 18))
-        // Half sheet rather than a confirmation dialog, matching every other chooser in the app -
-        // and it gives the consequence a row of its own beside the action, which a dialog of bare
-        // verbs under a grey line cannot.
-        .sheet(isPresented: $showLogoutConfirmation) {
-            ConfirmActionSheet(
-                title: "Log Out",
-                confirmTitle: "Log Out",
-                confirmSubtitle: "Signs out of this account. Wallet and message data stay on this device.",
-                confirmSystemImage: "rectangle.portrait.and.arrow.right"
-            ) {
-                Task { await walletManager.logout() }
-            }
         }
     }
 

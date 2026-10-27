@@ -19,6 +19,9 @@ struct AddressBookView: View {
     @State private var toastMessage: String?
     @State private var toastStyle: ToastStyle = .success
     @State private var toastToken = UUID()
+    @Environment(\.dismiss) private var dismiss
+    /// Opened as a sheet from the Wallet tab: a Done button closes it.
+    var showsDoneButton = false
 
     private var shown: [AddressBookEntry] { book.search(search) }
 
@@ -52,9 +55,9 @@ struct AddressBookView: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Addresses")
-            // Large, so "Addresses" shows under the bar (the balance holds the bar's middle),
-            // as the other tabs show their titles.
+            .navigationTitle("Address Book")
+            // Large, so the title shows under the bar (the balance holds the bar's middle),
+            // as the tabs show their titles.
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -62,6 +65,11 @@ struct AddressBookView: View {
                 }
                 ToolbarItem(placement: .principal) {
                     BalanceToolbarLabel()
+                }
+                if showsDoneButton {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
             // Add and Import / Export live behind one floating + (like Chats'), not in the bar.
@@ -830,7 +838,7 @@ struct AddressBookPickerSheet: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Addresses")
+            .navigationTitle("Address Book")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

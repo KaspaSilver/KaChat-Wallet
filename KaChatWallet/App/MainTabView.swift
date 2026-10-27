@@ -304,6 +304,8 @@ struct MainTabView: View {
             AddressBookView()
         case .kachatBots:
             KaChatBotsView()
+        case .settings:
+            SettingsView(isDockTab: true)
         case .apps:
             NavigationStack {
                 ProfileAppsView()

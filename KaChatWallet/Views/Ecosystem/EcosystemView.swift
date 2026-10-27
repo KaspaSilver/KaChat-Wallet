@@ -97,6 +97,8 @@ struct EcosystemView: View {
             AddressBookView()
         case .kachatBots:
             KaChatBotsView()
+        case .settings:
+            SettingsView(isDockTab: true)
         case .apps:
             NavigationStack {
                 // ProfileAppsView sets its own title; only the shared header items are added.

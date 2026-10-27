@@ -2046,6 +2046,9 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
     /// KaChat Bots (5.2.1) - Kaspa Hub > KaChat Bots: Block Reward Tracker, Wallet Tracker,
     /// Price Bot and Kaspa Answers; tapping one opens a chat with it (`KaChatBotsView`).
     case kachatBots
+    /// KaChat Wallet's Settings as a dock tab (owner's call, 2026-10-27) - in the slot Address
+    /// Book had; Address Book now opens from the Wallet tab.
+    case settings
     /// The container the other feature tabs live in when they are not in the dock themselves -
     /// see `ecosystemSections(from:)`. Displayed as "Kaspa Hub"; the case name and its raw
     /// value stay `ecosystem` because the raw value is PERSISTED in `tabOrder`, so renaming it
@@ -2075,9 +2078,11 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .chess: return "Chess"
         // Under the domains logo in the dock (`KachatTabIcon.domainsImage`).
         case .kachatNames: return ".kachat"
-        // KaChat Wallet calls it "Addresses" (owner's call, 2026-10-24).
-        case .addressBook: return "Addresses"
+        // "Addresses" in the dock from 2026-10-24; back to "Address Book" since it left the
+        // dock (owner's call, 2026-10-27).
+        case .addressBook: return "Address Book"
         case .kachatBots: return "Bots"
+        case .settings: return "Settings"
         case .ecosystem: return "Kaspa Hub"
         case .more: return "More"
         }
@@ -2102,6 +2107,7 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .kachatNames: return "at"
         case .addressBook: return "book.closed"
         case .kachatBots: return "cpu"
+        case .settings: return "gear"
         // Kaspa Hub wears the Kaspa mark itself, not an SF Symbol - see `usesKaspaLogo`.
         case .ecosystem: return "circle.hexagongrid"
         case .more: return "plus.circle"
@@ -2144,6 +2150,7 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .kachatNames: return 12
         case .addressBook: return 14
         case .kachatBots: return 15
+        case .settings: return 16
         case .ecosystem: return 10
         }
     }
@@ -2165,17 +2172,18 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
 
     /// Tabs the user can place. Excludes the Hub (pinned) and the retired "+ More".
     /// KaChat Wallet: the wallet's own four; every other KaChat feature stays off.
-    static let assignable: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .addressBook]
+    static let assignable: [AppTab] = [.portfolio, .coldStorage, .kachatNames, .settings]
 
     /// A default install shows exactly the five the dock can fit - Kaspa Hub, Portfolio, Chats,
     /// KaPosts, Profile - with Cold Storage, Swap and the websites list still ENABLED but living
     /// inside Kaspa Hub rather than competing for a dock slot.
-    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .addressBook]
+    static let defaultOrder: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .settings]
 
     /// What a fresh install starts with (owner's order, 2026-10-20). Everything else starts in
     /// Kaspa Hub. A saved arrangement is the person's and is never reset to this.
-    /// KaChat Wallet: Profile sits in the middle (owner's call, 2026-10-24).
-    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .addressBook]
+    /// KaChat Wallet: Profile sits in the middle (owner's call, 2026-10-24), Settings last
+    /// (2026-10-27).
+    static let defaultDock: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .settings]
 
     /// The rest, in the order the Hub grid shows them until the user rearranges it.
     static let defaultHub: [AppTab] = []
@@ -2237,6 +2245,7 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         case .addressBook: return true
         // Ordinary chats with the bots; nothing in it to keep from Simple Mode.
         case .kachatBots: return true
+        case .settings: return true
         case .ecosystem: return !settings.hideEcosystemTab
         // "+ More" is retired from the dock entirely (Customize Dock lives in Settings now) -
         // hard-hidden regardless of what an old saved blob says.

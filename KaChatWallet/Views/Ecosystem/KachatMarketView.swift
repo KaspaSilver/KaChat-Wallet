@@ -138,6 +138,9 @@ struct KachatMarketView: View {
                 }
                 .padding(.bottom, 28)
             }
+            // Swipe left / right anywhere on the screen to the next / previous tab. Simultaneous,
+            // so the vertical scroll keeps working.
+            .simultaneousGesture(pageSwipe())
             // Pull to refresh on testnet only; mainnet has nothing to refresh.
             .modifier(KachatRefreshable(enabled: live.isLive) { await live.refresh() })
             .task { await live.start() }
@@ -182,6 +185,21 @@ struct KachatMarketView: View {
             }
             .sheet(isPresented: $showHowItWorks) { howItWorksSheet }
         }
+    }
+
+    /// Swipe between the tabs, as on the Chess screen.
+    private func pageSwipe() -> some Gesture {
+        DragGesture(minimumDistance: 25, coordinateSpace: .global)
+            .onEnded { value in
+                let dx = value.translation.width, dy = value.translation.height
+                guard abs(dx) > 50, abs(dx) > abs(dy) * 1.5 else { return }
+                let pages = Page.allCases
+                guard let index = pages.firstIndex(of: page) else { return }
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    if dx < 0, index + 1 < pages.count { page = pages[index + 1] }
+                    else if dx > 0, index > 0 { page = pages[index - 1] }
+                }
+            }
     }
 
     /// Opens the name a tapped notification pointed at (testnet only, where names are live).

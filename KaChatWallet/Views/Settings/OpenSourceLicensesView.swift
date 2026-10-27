@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The notices the libraries KaChat ships ask to travel with it. Opus and WebRTC (BSD-3)
-/// require their notice in the binary's documentation; the Apache and MIT ones ask for
+/// The notices the libraries KaChat Wallet ships ask to travel with it - only what is in the
+/// binary (WebRTC left with calls, 2026-10-25). Opus (BSD-3) and BoringSSL (OpenSSL) require
+/// their notice in the binary's documentation; the Apache, MIT and ISC ones ask for
 /// attribution. Plain scrolling text, one card per library.
 struct OpenSourceLicensesView: View {
     @Environment(\.dismiss) private var dismiss
@@ -40,20 +41,29 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+    private static let isc = """
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+This product includes software developed by the OpenSSL Project for use in the OpenSSL Toolkit (http://www.openssl.org/). This product includes cryptographic software written by Eric Young (eay@cryptsoft.com).
+"""
+
     private static let notices: [Notice] = [
         Notice(id: "opus", name: "Opus", license: "BSD 3-Clause", holder: "Copyright 2001-2011 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo", text: bsd3),
-        Notice(id: "webrtc", name: "WebRTC", license: "BSD 3-Clause", holder: "Copyright (c) 2011, The WebRTC project authors. All rights reserved.", text: bsd3),
         Notice(id: "grpc-swift", name: "grpc-swift", license: "Apache License 2.0", holder: "Copyright 2015-2024, gRPC Authors", text: apache2),
         Notice(id: "swift-protobuf", name: "SwiftProtobuf", license: "Apache License 2.0", holder: "Copyright 2014-2024 Apple Inc. and the SwiftProtobuf project authors", text: apache2),
         Notice(id: "swift-nio", name: "SwiftNIO, swift-crypto, swift-log and the Swift Server ecosystem packages", license: "Apache License 2.0", holder: "Copyright 2017-2024 Apple Inc. and the SwiftNIO project authors", text: apache2),
-        Notice(id: "secp256k1", name: "swift-secp256k1 (P256K)", license: "MIT", holder: "Copyright (c) 2021 21.dev and the swift-secp256k1 authors", text: mit),
+        Notice(id: "boringssl", name: "BoringSSL (in swift-nio-ssl)", license: "ISC and OpenSSL", holder: "Copyright 1995-2016 The OpenSSL Project Authors; Copyright 1995-1998 Eric Young; Copyright Google Inc.", text: isc),
+        Notice(id: "llhttp", name: "llhttp (in SwiftNIO)", license: "MIT", holder: "Copyright Fedor Indutny, 2018.", text: mit),
+        Notice(id: "secp256k1", name: "swift-secp256k1 (P256K) and libsecp256k1", license: "MIT", holder: "Copyright (c) 2021 21.dev and the swift-secp256k1 authors; Copyright (c) 2013 Pieter Wuille", text: mit),
     ]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("KaChat is built with these open source libraries. Their authors ask that these notices travel with the app.")
+                    Text("KaChat Wallet is built with these open source libraries. Their authors ask that these notices travel with the app.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     ForEach(Self.notices) { notice in
