@@ -173,7 +173,7 @@ enum KachatLive {
         return s
     }
 
-    /// A key of this wallet: the main address or any revealed spending address (IOS-085).
+    /// A key of this wallet: the chatting address or any revealed spending address (IOS-085).
     @MainActor static func isMine(_ key: Data) -> Bool { KachatNamesActions.shared.isOwnKey(key) }
 
     static func eventIcon(_ op: String) -> String {
@@ -408,7 +408,7 @@ final class KachatHubModel: ObservableObject {
             listings = try await registry.listings()
             lapsed = try await registry.lapsed()
             grace = (try? await registry.inGrace()) ?? []
-            // the main address and every used address of this wallet (IOS-085)
+            // the chatting address and every used address of this wallet (IOS-085)
             if KachatNamesActions.shared.myKey != nil {
                 let own = try await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: false)
                 mine = own.names
@@ -1665,7 +1665,7 @@ struct KachatTxSheet<Inputs: View>: View {
     @State private var txId: String?
     @State private var done: KachatTxDone?
     @State private var sendError: String?
-    /// The paying address's balance when it isn't the main address (`payer`).
+    /// The paying address's balance when it isn't the chatting address (`payer`).
     @State private var payerBalance: UInt64?
     /// Who pays this transaction (`KachatNamesActions.payer(for:)`), worked out once per operation.
     @State private var payerInfo: KachatPayerInfo?
@@ -1739,7 +1739,7 @@ struct KachatTxSheet<Inputs: View>: View {
                 )
 
                 if let plan, let payer {
-                    // Spends from, and pays back to, the address that pays: the main address,
+                    // Spends from, and pays back to, the address that pays: the chatting address,
                     // the marketplace's chosen one, or the spending address holding the name.
                     let change = Self.balanceChange(plan, me: payer.key)
                     let fromChatting = payer.address == actions.myAddress
@@ -2086,7 +2086,7 @@ struct KachatClaimSheet: View {
 
                     Group {
                         if let q = quote, !q.affordable {
-                            KaspaUnit.text("Not enough KAS on your main address for this name.")
+                            KaspaUnit.text("Not enough KAS on your chatting address for this name.")
                                 .foregroundColor(.red)
                         } else {
                             Text("The price goes to the miners - KaChat takes nothing. The bond and the deposit come back when you release the name.")
@@ -2225,8 +2225,8 @@ struct KachatLiveNameDetail: View {
     /// address), or nil for someone else's. Resolved on load: it derives addresses.
     @State private var heldBy: KachatNamesActions.OwnAddress?
 
-    /// Held by the main address: the identity, so "Set as Primary" applies.
-    /// Held by the main address (Set as Primary applies only there).
+    /// Held by the chatting address: the identity, so "Set as Primary" applies.
+    /// Held by the chatting address (Set as Primary applies only there).
     private var mine: Bool { heldBy == .chatting || (heldBy == nil && KachatNamesActions.shared.myKey == info.owner) }
     /// Held by an address this app can sign for: every owner action is available.
     private var canActAsOwner: Bool {
@@ -2472,7 +2472,7 @@ struct KachatLiveNameDetail: View {
         }
         items.append(ManageItem(title: "Transfer", subtitle: "Sends the name to another address.",
                                 icon: "arrow.left.arrow.right", run: open(.transfer)))
-        // The primary name is the main address's identity; a name on a spending address
+        // The primary name is the chatting address's identity; a name on a spending address
         // can't be it.
         if mine {
             items.append(ManageItem(title: "Set as Primary", subtitle: "Shows you by this name across KaChat.",
@@ -3320,7 +3320,7 @@ struct KachatLiveDomainsTab: View {
         if registry.refreshedAt == nil { await registry.refresh() }
         // A lapsed name is no longer yours: it moves to the marketplace's Reclaimable tab (and the
         // bell says so, `KachatNamesNotifier`). Expired names in grace stay, to be renewed.
-        // Your own list (the main address's) holds the names and offers on every address of
+        // Your own list (the chatting address's) holds the names and offers on every address of
         // this wallet - one claimed with Buy From too, on any device restored from the seed.
         // Only an answer replaces what is shown (and the saved copy); a failed read keeps it.
         if walletAddress.lowercased() == KachatNamesActions.shared.myAddress {
@@ -3784,7 +3784,7 @@ struct KachatProfileSaveSheet: View {
     @State private var sending = false
     @State private var sendError: String?
     @State private var done: KachatTxDone?
-    /// The "not enough funds" popup: the main address's QR to fund it. It opens by itself
+    /// The "not enough funds" popup: the chatting address's QR to fund it. It opens by itself
     /// once per sheet; after that the Fund button under the message opens it (IOS-084).
     @State private var showFunding = false
     @State private var fundingShownOnce = false
@@ -3793,10 +3793,10 @@ struct KachatProfileSaveSheet: View {
     @AppStorage("kachat_profile_privacy_seen") private var privacySeen = false
 
     private static var notEnoughFundsMessage: String {
-        KaspaUnit.label(AppLocalization.string("You don't have enough funds. Please send at least 1 KAS to your main address."))
+        KaspaUnit.label(AppLocalization.string("You don't have enough funds. Please send at least 1 KAS to your chatting address."))
     }
 
-    /// The save can't be paid: the main address has no spendable coin, or too little for
+    /// The save can't be paid: the chatting address has no spendable coin, or too little for
     /// the fee - read from the error alone (an unreachable node is not "no funds").
     private func isShortOfFunds(_ error: Error) -> Bool {
         if case let KasiaError.networkError(message) = error, message.localizedCaseInsensitiveContains("insufficient") {
@@ -3837,7 +3837,7 @@ struct KachatProfileSaveSheet: View {
                     if let fee {
                         LabeledRow(title: "Network fee", value: KaspaUnit.amount(fee))
                         if let balance = WalletManager.shared.currentWallet?.balanceSompi {
-                            LabeledRow(title: "Main address balance", value: KaspaUnit.amount(balance))
+                            LabeledRow(title: "Chatting address balance", value: KaspaUnit.amount(balance))
                             LabeledRow(title: "Balance after", value: KaspaUnit.amount(balance > fee ? balance - fee : 0), bold: true)
                         }
                     } else if quoteError == nil {
@@ -3857,7 +3857,7 @@ struct KachatProfileSaveSheet: View {
                             }
                         }
                     } else if privacySeen {
-                        Text("Saved on chain from your main address to itself.")
+                        Text("Saved on chain from your chatting address to itself.")
                     } else {
                         Text("Profiles are public and on chain: anyone can read them, and earlier versions stay readable after you change them.")
                     }

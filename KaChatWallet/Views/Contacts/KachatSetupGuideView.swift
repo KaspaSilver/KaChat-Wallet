@@ -93,7 +93,7 @@ struct KachatSetupGuideView: View {
         case .howItWorks:
             stepHeader(
                 title: "How a name works",
-                subtitle: "Your name lives on the Kaspa network, held by your main address. Nobody can take it or change it while it's yours."
+                subtitle: "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours."
             ) {
                 Image(systemName: "seal.fill")
                     .font(.system(size: 48, weight: .regular))

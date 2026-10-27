@@ -11,7 +11,7 @@ import SwiftUI
 ///
 ///   1. `question` - "Did you create this seed with a passphrase?" (import) or "Do you want to add
 ///      a passphrase to your account?" (create). Yes / No / What is a passphrase?
-///   2. `entry` - the field, with the main address it produces updating underneath as you
+///   2. `entry` - the field, with the chatting address it produces updating underneath as you
 ///      type. That live address is the point: it is the only direct evidence that a passphrase
 ///      opens a DIFFERENT account rather than protecting the same one.
 ///   3. `explainer` - plain-language, back only, so reading about it always returns to the choice.
@@ -264,7 +264,7 @@ struct PassphraseOptionView: View {
     /// committing to an account that would otherwise look simply empty.
     private var addressPreview: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Your main address")
+            Text("Your chatting address")
                 .font(.caption)
                 .foregroundColor(.secondary)
             // Every character, wrapped over as many lines as it takes. This is the one place the

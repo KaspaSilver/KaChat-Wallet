@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// The bell on the Wallet tab holds two things:
-/// - Kaspa arriving in one of your own addresses - the main address, a spending address, cold
+/// - Kaspa arriving in one of your own addresses - the chatting address, a spending address, cold
 ///   storage (fed by AddressActivityNotifier);
 /// - your .kachat names: offers, sales, renewal and expiry, what happened to your offers
 ///   (`KachatNamesNotifier`).

@@ -29,7 +29,7 @@ struct PaymentRequestSummary: View {
                     .foregroundColor(.green)
                 AddressResolutionCard(address: creator)
                 if creator.lowercased() != request.address.lowercased() {
-                    Text("Signed by their main address. The payment goes to the address above.")
+                    Text("Signed by their chatting address. The payment goes to the address above.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

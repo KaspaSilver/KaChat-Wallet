@@ -270,7 +270,7 @@ final class WalletService: ObservableObject {
         AppLog.log("[WalletService] Polling and UTXO subscription stopped")
     }
 
-    /// Every address the live subscription watches: the main address plus the spending and
+    /// Every address the live subscription watches: the chatting address plus the spending and
     /// cold-storage addresses `AddressActivityNotifier` tracks.
     private func addressesToSubscribe(walletAddress: String) -> Set<String> {
         var addresses = AddressActivityNotifier.shared.watchedOwnAddresses()

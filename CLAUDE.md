@@ -13,8 +13,8 @@ The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at c
 (2026-10-24). Everything that was not the wallet has been removed (2026-10-25 calls; 2026-10-27
 1:1, group and public chats, KaPosts, Chess, Swap, bots, voice/Opus, the message store, chat push
 and sync, the app-extension data sharing). There is no chat code left: don't bring any back.
-Some names still say "chatting" (`ChattingAddressManageView`, `PaymentRequest.toChattingAddress`):
-that is the main (identity) address, called "Main Address" in the UI.
+The wallet's identity address keeps KaChat's name, "Chatting Address", in code and UI alike: the
+wallet is part of the KaChat ecosystem (owner's call, 2026-10-27). Don't rename it.
 
 ## Dock
 
@@ -23,16 +23,16 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 
 | Tab | View |
 |---|---|
-| Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
+| Portfolio | `PortfolioView` (`Views/Portfolio/`) |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - receive, the Main Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up arrow (bottom right) opens Send Kaspa |
-| .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - the home tab, where the app opens after logging in; receive, the Chatting Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up arrow (bottom right) opens Send Kaspa |
+| .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity |
 | Settings | `SettingsView(isDockTab: true)` (`Views/Settings/SettingsView.swift`, `AppTab.settings`) - no Done button as a tab; Log Out is its last row |
 
 Account setup: `ContentView` -> `OnboardingView` (create / import a seed) -> `MainTabView`. The
 sign-in screen says "KaChat Wallet" with the wallet logo and no tagline.
 
-The Wallet tab keeps KaChat's profile (Receive, Main Address, Edit KaChat Profile, Your Domains,
+The Wallet tab keeps KaChat's profile (Receive, Chatting Address, Edit KaChat Profile, Your Domains,
 share link); Help has only the .kachat names guide. The bell (`GlobalNotificationCenter`) lists
 "Received" and .kachat notifications.
 
@@ -45,12 +45,20 @@ share link); Help has only the .kachat names guide. The bell (`GlobalNotificatio
   refresh; without a subscription a 60s poll refreshes the balance and catches up receives.
 - `WalletManager`: accounts, keys, spending addresses. `AddressBookManager`, `ColdStorageManager`,
   `PortfolioManager`/`PortfolioViewModel`, `KNSService` and `KachatNames*` as their names say.
-- `NextcloudService`: Address Book backup only. Connect with an app password; the backup is the
-  Address Book export file (`AddressBookManager.ExportFile`, plain JSON with photos) at
-  `KaChat/KaChat Wallet Address Book.json` - never KaChat's `kachat-backup.json`. Automatic
-  Backup (off by default) uploads a few seconds after a change and on background; Restore and a
-  fresh connection merge it back (`importExport`). Address Book and Portfolio import/export can
-  also use the KaChat folder.
+- `NextcloudService`: backs up the Address Book and the Portfolio, nothing else, as two plain
+  JSON files in the `KaChat` folder - never KaChat's `kachat-backup.json`:
+  `KaChat Wallet Address Book.json` (the Address Book export file, `AddressBookManager.ExportFile`,
+  with photos) and `KaChat Wallet Portfolio.json` (`PortfolioBackupFile`: portfolios,
+  transactions, fees and deletion tombstones). Connect with an app password. Automatic Backup
+  (off by default) uploads a few seconds after either changes and on background; a backup merges
+  the server's Portfolio in first (`PortfolioSync.merge`, newest edit or deletion wins), so two
+  devices don't overwrite each other. Restore and a fresh connection merge both back
+  (`AddressBookManager.importExport`, `PortfolioViewModel.importFromArchive`). Address Book and
+  Portfolio import/export can also use the KaChat folder.
+- `KachatNamesRegistry` reads .kachat names through `AppSettings.indexerURL` (Settings >
+  Connection > Domains, editable so anyone can run their own indexer; blank = the network's
+  default) while it serves this registry and keeps up, else walks the chain itself; the Domains
+  tab shows which.
 - `AppSettings` (`Models/Models.swift`) holds only wallet settings; a blob from an older build
   (with KaChat's chat settings) still decodes, every field falling back to its default.
 
@@ -103,8 +111,8 @@ newest first, up to the balance increase. With Address Activity off it stays reg
 through `primary_address` alone. Registration and updates are signed like KaChat's
 (`PushNotificationManager.buildPushAuth`); the chat fields (`watched_addresses`,
 `watched_group_ids`, aliases) are always empty. A `name_event` push has no thread id (the wallet
-has no notification extension); a tap routes by its `type` and `name`. Settings > Notifications has only
-the Wallet page (Address Activity, sound, vibration). It asks for notification permission once, when
+has no notification extension); a tap routes by its `type` and `name`. Settings > Notifications is one page:
+Push Notifications, Address Activity, sound, vibration. It asks for notification permission once, when
 its tabs first show. Entitlements carry `aps-environment` (development / production). The service
 still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_SERVICE.md`.
 

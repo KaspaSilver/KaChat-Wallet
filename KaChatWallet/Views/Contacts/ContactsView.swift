@@ -994,7 +994,7 @@ struct ProfileView: View {
         }
     }
 
-    // MARK: - QR buttons row (Accept Kaspa / Main Address)
+    // MARK: - QR buttons row (Accept Kaspa / Chatting Address)
 
     private func qrButtonsSection(_ wallet: Wallet) -> some View {
         HStack(spacing: 24) {
@@ -1020,7 +1020,7 @@ struct ProfileView: View {
             } label: {
                 VStack(spacing: 8) {
                     qrCircleIcon
-                    Text("Main Address")
+                    Text("Chatting Address")
                         .font(.subheadline)
                         .foregroundColor(.primary)
                 }
@@ -1098,11 +1098,11 @@ struct ProfileView: View {
     // MARK: - Manage Addresses card
 
     /// One card for every address of this account - it opens Manage Addresses, which lists them
-    /// all, the main address first. Which address a send comes from is picked on the send
+    /// all, the chatting address first. Which address a send comes from is picked on the send
     /// screen (From), so this tab doesn't split Main from Spending or have a "primary".
     private func addressDropdownsSection(_ wallet: Wallet) -> some View {
         VStack(spacing: 20) {
-            // Testnet only: free TN10 coins for the main address, from the official faucet.
+            // Testnet only: free TN10 coins for the chatting address, from the official faucet.
             if AppSettings.load().networkType == .testnet {
                 TestnetFaucetClaimButton(address: wallet.publicAddress)
             }
@@ -1143,7 +1143,7 @@ struct ProfileView: View {
         }
     }
 
-    /// Everything this account holds: the main address and every spending address.
+    /// Everything this account holds: the chatting address and every spending address.
     private func accountTotalSompi(_ wallet: Wallet) -> UInt64? {
         guard let spending = spendingTotalSompi else { return nil }
         return (wallet.balanceSompi ?? 0) + spending
@@ -2352,7 +2352,7 @@ private struct KNSProfileEditorSheet: View {
                             Text("Confirm Changes")
                                 .font(.headline)
                                 .fontWeight(.bold)
-                            Text("\(pendingChanges.count) change\(pendingChanges.count == 1 ? "" : "s"). Each is submitted as its own on-chain transaction from your main address:")
+                            Text("\(pendingChanges.count) change\(pendingChanges.count == 1 ? "" : "s"). Each is submitted as its own on-chain transaction from your chatting address:")
                                 .font(.subheadline)
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(pendingChanges, id: \.self) { change in
@@ -2599,7 +2599,7 @@ private struct KNSDomainsListView: View {
     }
 
     /// The same read KachatLiveDomainsTab's load() does, reduced to a count: the whole wallet's
-    /// held names for the own main address, the one address's otherwise.
+    /// held names for the own chatting address, the one address's otherwise.
     private func refreshKachatCount() async {
         guard KachatNamesService.isEnabled, KachatNamesService.isLaunched else {
             kachatCount = 0
@@ -3051,7 +3051,7 @@ struct KNSDomainDetailView: View {
 /// whole inscription rather than a chosen KAS amount. Not `private`: ManageAddressesView's
 /// per-spending-address "KNS Domains" tab reuses this exact sheet, passing
 /// `spendingAddressIndex` so the transfer is owned/funded/signed by that spending address's
-/// derived key instead of the identity/main address.
+/// derived key instead of the identity/chatting address.
 struct KNSDomainSendView: View {
     let domain: KNSDomain
     /// When non-nil, the domain lives on this spending-chain address index and the transfer
@@ -3461,14 +3461,14 @@ struct KNSDomainSendView: View {
     }
 }
 
-/// Transaction history for the main (identity) address, reached from its dropdown in
+/// Transaction history for the chatting (identity) address, reached from its dropdown in
 /// Profile. Same pattern as ManageAddressesView's SpendingAddressTransactionHistoryView: tapping
 /// a transaction opens it directly on whichever block explorer is selected in Settings >
 /// Connection > Kaspa Explorer, rather than showing an in-app detail screen.
-/// Full-featured detail screen for the wallet's own main (identity) address — field-for-field
+/// Full-featured detail screen for the wallet's own chatting (identity) address — field-for-field
 /// the same screen as ManageAddressesView's SpendingAddressTransactionHistoryView (balance,
 /// Transaction History/UTXOs tabs, Compound UTXOs, Export private key, Explorer, Receive/Send),
-/// just address-based instead of index-based. Reached from the Profile screen's Main Address
+/// just address-based instead of index-based. Reached from the Profile screen's Chatting Address
 /// section's "Manage Address" row.
 struct ChattingAddressManageView: View {
     let address: String
@@ -3572,7 +3572,7 @@ struct ChattingAddressManageView: View {
                 AddressDomainsTab(address: address)
             }
         }
-        .navigationTitle("Main Address")
+        .navigationTitle("Chatting Address")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddressActions) {
             addressActionsSheet
@@ -3968,7 +3968,7 @@ struct ChattingAddressManageView: View {
     }
 }
 
-/// Private-key reveal for the wallet's own main (identity) address — mirrors
+/// Private-key reveal for the wallet's own chatting (identity) address — mirrors
 /// SpendingAddressPrivateKeyView, but reads the wallet's own root private key rather than a
 /// derived spending key, since the identity address isn't part of the spending-chain derivation.
 /// Gated by `biometricSeedPhraseEnabled` (not `biometricSpendingKeyEnabled`) since this is the
@@ -4048,7 +4048,7 @@ private struct ChattingAddressPrivateKeyView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("Main Address")
+            .navigationTitle("Chatting Address")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -4090,7 +4090,7 @@ private struct ChattingAddressPrivateKeyView: View {
     }
 }
 
-/// The main address's public key, from the Address Actions sheet.
+/// The chatting address's public key, from the Address Actions sheet.
 ///
 /// Nothing is derived or unlocked to show this: a Kaspa P2PK address IS its public key in bech32,
 /// so this decodes the address the screen already has. No reveal gate and no clipboard expiry
@@ -4103,7 +4103,7 @@ private struct ChattingAddressPublicKeyView: View {
     @State private var toastToken = UUID()
 
     /// nil only for an address shape that carries no key (script-hash), which the wallet's own
-    /// main address never is.
+    /// chatting address never is.
     private var publicKeyHex: String? {
         KaspaAddress.publicKey(from: address)?.hexString
     }
@@ -4115,7 +4115,7 @@ private struct ChattingAddressPublicKeyView: View {
                     Label("Safe to share", systemImage: "checkmark.seal.fill")
                         .font(.headline)
                         .foregroundColor(.accentColor)
-                    Text("This is the public half of your main address. It identifies you and cannot spend anything.")
+                    Text("This is the public half of your chatting address. It identifies you and cannot spend anything.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -4176,7 +4176,7 @@ private struct ChattingAddressPublicKeyView: View {
     }
 }
 
-/// Dedicated white-background QR display, matching Android's "Accept Kaspa"/"Main Address"
+/// Dedicated white-background QR display, matching Android's "Accept Kaspa"/"Chatting Address"
 /// QR screen — deliberately uses literal black/white colors rather than adaptive .primary/
 /// .secondary, since forcing a white content area regardless of system dark/light mode would
 /// otherwise leave semantic text colors resolved for dark mode (and invisible on the white
@@ -4184,7 +4184,7 @@ private struct ChattingAddressPublicKeyView: View {
 struct ChattingAddressQRView: View {
     let address: String
     let balanceSompi: UInt64?
-    var subtitle: String = "Your main address holds your .kachat names and profile. Domains cost from 35 to 4,000 Kaspa, depending on the name."
+    var subtitle: String = "Your chatting address holds your .kachat names and profile. Domains cost from 35 to 4,000 Kaspa, depending on the name."
 
     @State private var qrImage: UIImage?
     @State private var toastMessage: String?
@@ -4315,7 +4315,7 @@ enum WithdrawFeeTier: String, CaseIterable, Identifiable, Hashable {
 /// Custom success card replacing a plain alert so the transaction id can be a real tappable
 /// link (native SwiftUI alerts can't embed interactive text in their message) - shared by every
 /// "you just sent Kaspa" flow (main-address withdraw, Manage Addresses' per-address send).
-/// Sends a plain KAS transfer from the wallet's main (identity) address to an arbitrary
+/// Sends a plain KAS transfer from the wallet's chatting (identity) address to an arbitrary
 /// recipient address. Reuses AddContactView's address-entry conventions (paste/QR scan,
 /// live validation) but with an amount field instead of a contact-name field, since this
 /// isn't creating a contact.
@@ -4339,7 +4339,7 @@ struct WithdrawKaspaView: View {
 
     /// The request this send pays, if any (`paymentRequest`, or one pasted in).
     @State private var activeRequest: PaymentRequest?
-    /// Where the Kaspa leaves from (the From section): the main address by default.
+    /// Where the Kaspa leaves from (the From section): the chatting address by default.
     @State private var source: SendSource = .chatting
     /// The From address's balance, loaded by `SendFromSection`.
     @State private var sourceBalanceSompi: UInt64?
@@ -4425,7 +4425,24 @@ struct WithdrawKaspaView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            // Swipe up anywhere on the screen to send (the bar at the bottom says so).
+            SwipeUpToSendScrollView(
+                screenTitle: isCompoundMode ? "Compound UTXOs" : (activeRequest != nil ? "Payment Request" : "Send Kaspa"),
+                onCancel: { dismiss() },
+                title: isCompoundMode ? "Swipe up to Consolidate" : "Swipe up to Send",
+                isBusy: isSending,
+                isEnabled: canSend,
+                amountSompi: amountSompi,
+                recipient: isCompoundMode ? nil : (resolvedDomain ?? effectiveAddress),
+                sent: sentTransaction,
+                failureMessage: errorMessage,
+                onDone: {
+                    sentTransaction = nil
+                    dismiss()
+                    onComplete?()
+                },
+                action: send
+            ) {
                 VStack(spacing: 18) {
                     if !isCompoundMode {
                         SendFromSection(source: $source, availableSompi: $sourceBalanceSompi,
@@ -4482,13 +4499,6 @@ struct WithdrawKaspaView: View {
                             .foregroundColor(.red)
                             .multilineTextAlignment(.center)
                     }
-
-                    SendActionButton(
-                        title: isCompoundMode ? "Slide to Consolidate" : "Slide to Send",
-                        isBusy: isSending,
-                        isEnabled: canSend,
-                        action: send
-                    )
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
@@ -4502,13 +4512,7 @@ struct WithdrawKaspaView: View {
                 customExtraFeeSompi = nil
                 isEditingFee = false
             }
-            .navigationTitle(isCompoundMode ? "Compound UTXOs" : (activeRequest != nil ? "Payment Request" : "Send Kaspa"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
+            // The header (Cancel, title) is SwipeUpToSendScrollView's own, so it moves with the swipe.
             .scrollDismissesKeyboard(.interactively)
             .sheet(isPresented: $showQRScanner) {
                 QRScannerView { code in
@@ -4520,17 +4524,7 @@ struct WithdrawKaspaView: View {
                     manualUtxos = selection
                 }
             }
-            // A half sheet rather than the dimmed overlay card this used to be, so every send in
-            // the app finishes the same way - see `SentConfirmationSheet`.
-            .sheet(item: $sentTransaction) { sent in
-                SentConfirmationSheet(transaction: sent) {
-                    sentTransaction = nil
-                    dismiss()
-                    onComplete?()
-                }
-                .presentationDetents([.height(sent.sheetHeight)])
-                .presentationDragIndicator(.visible)
-            }
+            // The confirmation is the swipe-up's own full screen (SwipeUpToSendScrollView).
             .task(id: feeEstimationKey) {
                 guard hasValidRecipient, let amountSompi else {
                     normalFeeSompi = nil
@@ -4721,6 +4715,7 @@ struct WithdrawKaspaView: View {
         let spendingIndex = source.spendingIndex
         Task {
             do {
+                try await SendFailureSimulation.failIfEnabled()
                 let txId: String
                 if let spendingIndex {
                     txId = try await walletService.sendFromSpendingAddress(index: spendingIndex, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
@@ -4875,7 +4870,7 @@ struct ProfileHelpView: View {
 
 /// "Claim Testnet Kaspa", above the addresses card on testnet. The official TN10 faucet sits
 /// behind a Cloudflare check, so it can't be claimed from in the background: the button copies
-/// the main address (`kaspatest:` form) and opens the faucet in the in-app browser, with a
+/// the chatting address (`kaspatest:` form) and opens the faucet in the in-app browser, with a
 /// strip saying it's copied, where you paste it, pass the
 /// check and claim the most it offers. The faucet allows one claim a day, so once the address's
 /// balance goes up after a visit the button locks for 24 hours (kept per address).
@@ -4893,7 +4888,7 @@ struct TestnetFaucetClaimButton: View {
 
     private var defaultsKey: String { "kachat_tn10_faucet_claimed_\(address.lowercased())" }
 
-    /// The main address in its TN10 (`kaspatest:`) form - what the faucet's address field
+    /// The chatting address in its TN10 (`kaspatest:`) form - what the faucet's address field
     /// takes. The wallet already shows it that way on testnet; this makes sure of it.
     private var tn10Address: String {
         guard let a = KaspaAddress(address: address.lowercased()), a.hrp != "kaspatest" else { return address }
@@ -4939,7 +4934,7 @@ struct TestnetFaucetClaimButton: View {
                             } else if let until {
                                 Text(verbatim: String(format: AppLocalization.string("Claimed. You can claim again in %@."), remaining(until: until, now: context.date)))
                             } else {
-                                Text("Copies your main address and opens the TN10 faucet: paste it, pass the check and claim the most it offers.")
+                                Text("Copies your chatting address and opens the TN10 faucet: paste it, pass the check and claim the most it offers.")
                             }
                         }
                         .font(.caption)
@@ -4967,7 +4962,7 @@ struct TestnetFaucetClaimButton: View {
         .fullScreenCover(isPresented: $showFaucet, onDismiss: { Task { await checkForClaim() } }) {
             InAppBrowserScreen(
                 url: Self.faucetURL,
-                notice: AppLocalization.string("Your TN10 main address is copied. Paste it into the faucet's address field.")
+                notice: AppLocalization.string("Your TN10 chatting address is copied. Paste it into the faucet's address field.")
             ) { showFaucet = false }
         }
     }

@@ -168,7 +168,7 @@ struct KachatMarketView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { ConnectionStatusIndicator() }
-                // the marketplace buys with the main address, like every other screen pays
+                // the marketplace buys with the chatting address, like every other screen pays
                 ToolbarItem(placement: .principal) { BalanceToolbarLabel() }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
@@ -894,9 +894,9 @@ private struct KachatComingSoonPill: View {
 // MARK: - An address's .kachat names
 
 /// The ".kachat" tab of every screen that shows an address's history - Manage Addresses,
-/// Cold Storage and the main address: the .kachat names that address holds. It replaced the
+/// Cold Storage and the chatting address: the .kachat names that address holds. It replaced the
 /// KNS Domains tab (5.2), and is empty until .kachat names launch.
-/// The Domains tab of an address screen (the main address, a spending address, a KasSigner
+/// The Domains tab of an address screen (the chatting address, a spending address, a KasSigner
 /// address): one card per name service - .kachat, .k, .kaspa, .kas - each with how many names
 /// this address holds there; tap one to see them. Every service is asked at once, for this
 /// address only (Your Domains' own lists are left alone).
@@ -1072,7 +1072,7 @@ struct KachatAddressDomainsList: View {
     }
 }
 
-/// One address's .kachat names on testnet - Manage Addresses (spending), the main address and
+/// One address's .kachat names on testnet - Manage Addresses (spending), the chatting address and
 /// KasSigner each show their own address's names in its .kachat tab. Same cards and detail screen
 /// as Your Domains > .kachat. Names on an address this wallet can't sign for (a KasSigner address)
 /// open read-only: their actions need that address's key.

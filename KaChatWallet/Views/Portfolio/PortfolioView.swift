@@ -238,7 +238,7 @@ struct PortfolioView: View {
     }
 
     /// Network fees the active portfolio's imported addresses paid - in KAS, and in the app
-    /// currency at each day's price. Fed by Add Main Address (and Add Kaspa Address).
+    /// currency at each day's price. Fed by Add Chatting Address (and Add Kaspa Address).
     private var feesCard: some View {
         let fees = viewModel.feeSummary
         let hidden = viewModel.valuesHidden
@@ -255,7 +255,7 @@ struct PortfolioView: View {
                 if fees.count == 0 {
                     Text(verbatim: "—")
                         .font(.scaled(size: 20, weight: .bold))
-                    Text("Add your main address with + to count the network fees it has paid.")
+                    Text("Add your chatting address with + to count the network fees it has paid.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

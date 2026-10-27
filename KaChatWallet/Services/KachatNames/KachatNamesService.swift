@@ -86,7 +86,7 @@ final class KachatNamesService: ObservableObject {
     /// shown and parsed with it.
     nonisolated static var addressPrefix: String { AppSettings.load().networkType == .mainnet ? "kaspa" : "kaspatest" }
     /// Address profiles (`kchat:1:profile:`) work on every network: a profile is a plain
-    /// self-send from the main address, with no registry behind it, so mainnet can save and
+    /// self-send from the chatting address, with no registry behind it, so mainnet can save and
     /// read them before its registry launches. Only the primary name needs the registry.
     nonisolated static var profilesEnabled: Bool { isEnabled }
 

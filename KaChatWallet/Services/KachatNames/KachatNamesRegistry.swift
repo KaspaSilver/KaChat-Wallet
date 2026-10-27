@@ -1376,7 +1376,7 @@ final class KachatNamesNotifier {
         for n in owned where n.status(graceMs: p.graceMs) == .active {
             offersOnMine += ((try? await registry.offers(for: n.name)) ?? []).filter { ownKeys.contains($0.seller) }
         }
-        // The indexer pushes name reminders only to the main address: for a name on another
+        // The indexer pushes name reminders only to the chatting address: for a name on another
         // address of this wallet the phone schedules its own (XP-024).
         // a different wallet signed in meanwhile: this answer isn't its
         guard KachatNamesActions.shared.myAddress == wallet else { return }
@@ -1478,7 +1478,7 @@ final class KachatNamesNotifier {
 }
 
 /// Local reminders for .kachat names held by one of this wallet's spending addresses (Buy From):
-/// the indexer's renewal and expiry pushes reach only the main address, so the phone
+/// the indexer's renewal and expiry pushes reach only the chatting address, so the phone
 /// schedules its own - renewal opens, the name expired, and a day before grace ends - from each
 /// name's expiry (XP-024). Nothing leaves the phone. Rescheduled on every notifier check: a
 /// renewed name moves its reminders, a name that left the wallet loses them. Tapping one opens

@@ -254,7 +254,7 @@ extension KaspaFullTransactionResponse: Identifiable {
 
 /// What to do with a transaction you tapped in an address history: look at it, or record it.
 ///
-/// Shared by cold storage history, the spending-address histories and the main address, all
+/// Shared by cold storage history, the spending-address histories and the chatting address, all
 /// three of which used to raise their own identical confirmation dialog.
 struct TransactionActionsSheet: View {
     let transaction: KaspaFullTransactionResponse

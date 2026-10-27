@@ -3,7 +3,7 @@ import CryptoKit
 import P256K
 
 /// Spending-chain address system: a second BIP44 *account* branch off the same wallet seed,
-/// distinct from the identity/main address's account (see `WalletManager.deriveKeysFromSeed`,
+/// distinct from the identity/chatting address's account (see `WalletManager.deriveKeysFromSeed`,
 /// account 0). Addresses are always re-derived live from the seed + index rather than persisted -
 /// only the index bounds are stored, in UserDefaults scoped per wallet address (see
 /// `currentSpendingAddressIndex`'s doc comment for why that, and not `Wallet`'s own
@@ -759,14 +759,14 @@ extension WalletManager {
     /// single seed decrypt via the shared change-node key - for callers that need the whole
     /// set WITHOUT balances (e.g. AddressActivityNotifier's own-address watch set), unlike
     /// `getSpendingAddressList()` which also fires a UTXO fetch.
-    /// Which of this wallet's own addresses `address` is: "Main Address", or a spending
+    /// Which of this wallet's own addresses `address` is: "Chatting Address", or a spending
     /// address's name ("Address #3", or the name the person gave it). nil for anyone else's.
     /// Cheap enough for a view body: the address-to-index map is built once per account and
     /// address count (`spendingAddresses(inRange:)` serves it from its cache).
     func ownAddressLabel(for address: String) -> String? {
         let target = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !target.isEmpty, let wallet = currentWallet?.publicAddress.lowercased() else { return nil }
-        if target == wallet { return AppLocalization.string("Main Address") }
+        if target == wallet { return AppLocalization.string("Chatting Address") }
         let key = "\(wallet)|\(maxSpendingAddressIndex)|q\(maxQuantumAddressIndex)"
         if Self.ownAddressIndexCache?.key != key {
             var map: [String: Int] = [:]
@@ -817,7 +817,7 @@ extension WalletManager {
     }
 
     /// Hides every revealed spending address at once (Address Visibility > Hide All): Manage
-    /// Addresses then starts empty under the main address.
+    /// Addresses then starts empty under the chatting address.
     func hideAllSpendingAddresses() {
         var hidden = Set(0...max(0, maxSpendingAddressIndex))
         if maxQuantumAddressIndex >= 0 {

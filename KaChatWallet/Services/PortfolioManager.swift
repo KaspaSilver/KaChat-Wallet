@@ -75,15 +75,16 @@ final class PortfolioManager: ObservableObject {
         }
     }
 
+    /// `makeActive: false` adds it without switching to it (a CSV import naming a new portfolio).
     @discardableResult
-    func addPortfolio(name: String) -> Portfolio? {
+    func addPortfolio(name: String, makeActive: Bool = true) -> Portfolio? {
         guard portfolios.count < Self.maxPortfolios else { return nil }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolved = trimmed.isEmpty ? "Portfolio \(portfolios.count + 1)" : trimmed
         let portfolio = Portfolio(id: UUID(), name: resolved, sortOrder: portfolios.count, createdAt: Date())
         portfolios = Self.normalizingSortOrder(portfolios + [portfolio])
         persist()
-        setActivePortfolio(portfolio.id)
+        if makeActive { setActivePortfolio(portfolio.id) }
         return portfolio
     }
 
@@ -125,7 +126,7 @@ final class PortfolioManager: ObservableObject {
     }
 
     /// Saves the list: anything added, renamed or moved is stamped, anything gone is recorded
-    /// as deleted, and the Nextcloud backup is marked to upload (NEXTCLOUD_SYNC.md section 5).
+    /// as deleted, and the Nextcloud backup is marked to upload.
     private func persist() {
         let result = PortfolioLedgerStore.stamped(previous: savedPortfolios, current: portfolios, now: Date()) { $0.updatedAt = $1 }
         if result.items != portfolios { portfolios = result.items }
@@ -135,6 +136,7 @@ final class PortfolioManager: ObservableObject {
         )
         PortfolioLedgerStore.savePortfolios(portfolios, walletAddress: activeWalletAddress)
         savedPortfolios = portfolios
+        NextcloudService.shared.noteBackupDataChanged()
     }
 
     /// Re-reads this wallet's list after a Nextcloud restore wrote a merged one.

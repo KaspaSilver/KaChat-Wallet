@@ -315,7 +315,7 @@ final class PushNotificationManager: ObservableObject {
         let primaryAddress = collectPrimaryAddress()
         let watchOnlyAddresses = collectWatchOnlyAddresses()
 
-        // Its own addresses (watch-only) and its main address (.kachat name events) are the
+        // Its own addresses (watch-only) and its chatting address (.kachat name events) are the
         // wallet's whole registration.
         guard hasPushSubscriptions(watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) else {
             throw PushError.noWatchedAddresses
@@ -579,7 +579,7 @@ final class PushNotificationManager: ObservableObject {
         let settings = AppSettings.load()
         let primaryAddress = collectPrimaryAddress()
         let watchOnlyAddresses = collectWatchOnlyAddresses()
-        // Only unregister when there is NOTHING left to watch. The main address alone (.kachat
+        // Only unregister when there is NOTHING left to watch. The chatting address alone (.kachat
         // name events, with Address Activity off) is a registration.
         if !hasPushSubscriptions(watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) {
             AppLog.log("[Push] Nothing to watch, unregistering device from indexer")
@@ -1027,7 +1027,7 @@ final class PushNotificationManager: ObservableObject {
         WalletManager.shared.currentWallet?.publicAddress
     }
 
-    /// Whether this device has anything to register for. The main address alone is enough -
+    /// Whether this device has anything to register for. The chatting address alone is enough -
     /// .kachat name events go to `primary_address` whether or not Address Activity (the
     /// watch-only list) is on, so switching that off must not unregister the device.
     private func hasPushSubscriptions(watchOnlyAddresses: [String]? = nil, primaryAddress: String? = nil) -> Bool {

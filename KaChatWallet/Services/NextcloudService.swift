@@ -83,18 +83,22 @@ enum NextcloudError: LocalizedError {
         case .malformedResponse:
             return "Unexpected response from the Nextcloud server."
         case .backupNotFound:
-            return "No Address Book backup was found in the KaChat folder."
+            return "No backup was found in the KaChat folder."
         }
     }
 }
 
-/// The user's own Nextcloud server, for one thing: backing up the Address Book to the KaChat
-/// folder. Connect with an app password; the backup is the Address Book export file
-/// (`AddressBookManager.ExportFile`, plain JSON with photos) at `KaChat/<backupFileName>`, so any
-/// KaChat app can import it. Automatic Backup (default off) uploads it a few seconds after the
-/// Address Book changes and when the app goes to the background; Restore merges it back in, and a
-/// fresh connection restores once by itself. Import / Export in the Address Book also reach the
-/// KaChat folder (and Portfolio's CSV export).
+/// The user's own Nextcloud server, for one thing: backing up the Address Book and the Portfolio
+/// to the KaChat folder. Connect with an app password; the backup is two plain JSON files there:
+/// - `addressBookFileName`: the Address Book export file (`AddressBookManager.ExportFile`, with
+///   photos), so any KaChat app's Address Book import can read it.
+/// - `portfolioFileName`: every portfolio with its transactions and fees, plus what was deleted
+///   (`PortfolioBackupFile`), so two devices merge without bringing a deletion back. A backup
+///   merges what is already on the server in first, so it never overwrites another device's
+///   changes.
+/// Automatic Backup (default off) uploads a few seconds after either changes and when the app goes
+/// to the background; Restore merges both back in, and a fresh connection restores once by
+/// itself. Import / Export in the Address Book and Portfolio also reach the KaChat folder.
 ///
 /// Everything here is scoped to the ACTIVE WALLET ACCOUNT: credentials live in a per-wallet
 /// Keychain entry (`KeychainService.saveNextcloudCredentials(_:walletAddress:)`), the toggle and
@@ -111,7 +115,7 @@ final class NextcloudService: ObservableObject {
     /// connection is not a request to start uploading.
     @Published private(set) var autoBackupEnabled = false
 
-    /// When the active wallet's Address Book last uploaded (nil = never).
+    /// When the active wallet's backup last uploaded (nil = never).
     @Published private(set) var lastBackupAt: Date?
 
     /// One-line result of the silent restore on connect. MainTabView renders it as a toast; nil
@@ -129,11 +133,11 @@ final class NextcloudService: ObservableObject {
     /// Same 8-byte SHA256 hex as the Keychain entry, for the UserDefaults keys.
     private var currentWalletHashSuffix: String?
 
-    /// The pending upload after an Address Book change, and any upload in flight - cancelled on
-    /// an account switch so one account's book never uploads while another is active.
+    /// The pending upload after a change, and any upload in flight - cancelled on an account
+    /// switch so one account's data never uploads while another is active.
     private var backupTask: Task<Void, Never>?
-    /// The Address Book changed since the last successful upload. Persisted, so a kill before the
-    /// upload still backs up on the next background or launch.
+    /// The Address Book or Portfolio changed since the last successful upload. Persisted, so a
+    /// kill before the upload still backs up on the next background or launch.
     private var pendingBackup = false
 
     private nonisolated static let autoBackupKey = "kachat_nextcloud_auto_backup"
@@ -147,13 +151,14 @@ final class NextcloudService: ObservableObject {
         "kachat_nextcloud_auto_restore_done", "kachat_nextcloud_auto_sync_chosen", "kachat_nextcloud_last_etag",
         "kachat_nextcloud_talk_calls"
     ]
-    /// Quiet time after an Address Book change before the upload, so a burst of edits is one.
+    /// Quiet time after a change before the upload, so a burst of edits is one.
     private nonisolated static let backupDebounce: TimeInterval = 5
 
     static let backupFolderName = "KaChat"
-    /// Its own file: KaChat's chat backup (`kachat-backup.json`) may share the folder, and the
-    /// wallet never touches it.
-    static let backupFileName = "KaChat Wallet Address Book.json"
+    /// The wallet's own files: KaChat's chat backup (`kachat-backup.json`) may share the folder,
+    /// and the wallet never touches it.
+    static let addressBookFileName = "KaChat Wallet Address Book.json"
+    static let portfolioFileName = "KaChat Wallet Portfolio.json"
 
     private init() {
         // No credential load here: state stays empty until WalletManager reports the active
@@ -237,20 +242,22 @@ final class NextcloudService: ObservableObject {
         }
     }
 
-    /// Deletes the Address Book backup from the user's Nextcloud. Only ever on the user's say-so
-    /// (the Delete Account option that names it).
+    /// Deletes the Address Book and Portfolio backups from the user's Nextcloud. Only ever on the
+    /// user's say-so (the Delete Account option that names it).
     func deleteRemoteBackup() async throws {
-        guard let request = authenticatedFileRequest(for: backupFilePath) else { throw NextcloudError.badCredentials }
-        var delete = request
-        delete.httpMethod = "DELETE"
-        let (_, response) = try await URLSession.shared.data(for: delete)
-        guard let http = response as? HTTPURLResponse else { throw NextcloudError.malformedResponse }
-        if http.statusCode == 401 { throw NextcloudError.badCredentials }
-        // 404: nothing there, which is the state asked for.
-        guard (200..<300).contains(http.statusCode) || http.statusCode == 404 else {
-            throw NextcloudError.httpError(http.statusCode)
+        for path in [addressBookPath, portfolioPath] {
+            guard let request = authenticatedFileRequest(for: path) else { throw NextcloudError.badCredentials }
+            var delete = request
+            delete.httpMethod = "DELETE"
+            let (_, response) = try await URLSession.shared.data(for: delete)
+            guard let http = response as? HTTPURLResponse else { throw NextcloudError.malformedResponse }
+            if http.statusCode == 401 { throw NextcloudError.badCredentials }
+            // 404: nothing there, which is the state asked for.
+            guard (200..<300).contains(http.statusCode) || http.statusCode == 404 else {
+                throw NextcloudError.httpError(http.statusCode)
+            }
         }
-        AppLog.log("%@", "[Nextcloud] Address Book backup deleted")
+        AppLog.log("%@", "[Nextcloud] Backup deleted")
     }
 
     /// Deletes a wallet's stored Nextcloud login and settings outright - used when that account
@@ -286,9 +293,10 @@ final class NextcloudService: ObservableObject {
 
     // MARK: - Automatic backup
 
-    /// The Address Book changed (AddressBookManager calls this on every save, removal and import):
-    /// with Automatic Backup on, it uploads a few seconds after the changes settle.
-    func noteAddressBookChanged() {
+    /// The Address Book or Portfolio changed (AddressBookManager, PortfolioManager and
+    /// PortfolioViewModel call this on every save): with Automatic Backup on, it uploads a few
+    /// seconds after the changes settle.
+    func noteBackupDataChanged() {
         guard autoBackupEnabled, isConnected else { return }
         setPendingBackup(true)
         scheduleBackup(after: Self.backupDebounce)
@@ -311,7 +319,7 @@ final class NextcloudService: ObservableObject {
                 try await self.runBackup()
             } catch {
                 // Kept pending: the next change, background or launch retries.
-                AppLog.log("%@", "[Nextcloud] Automatic Address Book backup failed: \(error.localizedDescription)")
+                AppLog.log("%@", "[Nextcloud] Automatic backup failed: \(error.localizedDescription)")
             }
         }
     }
@@ -320,7 +328,7 @@ final class NextcloudService: ObservableObject {
     private func backUpPendingInBackground() {
         guard autoBackupEnabled, isConnected, pendingBackup else { return }
         var taskId: UIBackgroundTaskIdentifier = .invalid
-        taskId = UIApplication.shared.beginBackgroundTask(withName: "kachat.addressbook.backup") {
+        taskId = UIApplication.shared.beginBackgroundTask(withName: "kachat.wallet.backup") {
             UIApplication.shared.endBackgroundTask(taskId)
             taskId = .invalid
         }
@@ -334,13 +342,25 @@ final class NextcloudService: ObservableObject {
 
     // MARK: - Backup and restore
 
-    /// Uploads this wallet's Address Book to `KaChat/<backupFileName>`, replacing the previous
-    /// backup. The manual Back Up Now and the automatic backup both come here.
+    /// Uploads this wallet's Address Book to `addressBookFileName` and its Portfolio to
+    /// `portfolioFileName`, replacing the previous backup. The Portfolio on the server is merged
+    /// in first, so another device's edits and deletions survive. The manual Back Up Now and the
+    /// automatic backup both come here.
     func runBackup() async throws {
         guard let walletAtStart = currentWalletAddress else { throw NextcloudError.noActiveWallet }
-        let data = try AddressBookManager.shared.exportData()
+        let addressBook = try AddressBookManager.shared.exportData()
         _ = try await uploadToKaChatFolder(
-            data: data, filename: Self.backupFileName, contentType: "application/json", keepSpaces: true
+            data: addressBook, filename: Self.addressBookFileName, contentType: "application/json", keepSpaces: true
+        )
+        guard currentWalletAddress == walletAtStart else { return }
+
+        if let remote = try await downloadPortfolioBackup() {
+            guard currentWalletAddress == walletAtStart else { return }
+            PortfolioViewModel.shared.importFromArchive(remote)
+        }
+        let portfolio = try PortfolioBackupFile(PortfolioViewModel.shared.syncState.forArchive()).encoded()
+        _ = try await uploadToKaChatFolder(
+            data: portfolio, filename: Self.portfolioFileName, contentType: "application/json", keepSpaces: true
         )
         guard currentWalletAddress == walletAtStart else { return }
         setPendingBackup(false)
@@ -348,33 +368,78 @@ final class NextcloudService: ObservableObject {
         if let key = scopedKey(Self.lastBackupKey) {
             UserDefaults.standard.set(lastBackupAt?.timeIntervalSince1970 ?? 0, forKey: key)
         }
-        AppLog.log("%@", "[Nextcloud] Address Book backed up")
+        AppLog.log("%@", "[Nextcloud] Address Book and Portfolio backed up")
     }
 
-    /// Merges the backup into this wallet's Address Book (`AddressBookManager.importExport`: an
-    /// address not saved here is added, one saved here takes the backup's version only when that
-    /// is newer). Returns (added, updated). Throws `backupNotFound` when there is none yet.
+    /// What a restore brought in.
+    struct RestoreResult {
+        var addressesAdded = 0
+        var addressesUpdated = 0
+        /// The Portfolio backup changed this device's portfolios.
+        var portfolioChanged = false
+
+        var addresses: Int { addressesAdded + addressesUpdated }
+        var changedAnything: Bool { addresses > 0 || portfolioChanged }
+    }
+
+    /// Merges the backup into this wallet:
+    /// - Address Book (`AddressBookManager.importExport`): an address not saved here is added, one
+    ///   saved here takes the backup's version only when that is newer.
+    /// - Portfolio (`PortfolioViewModel.importFromArchive`): the newest edit or deletion wins per
+    ///   portfolio and transaction.
+    /// Either file may be missing; throws `backupNotFound` when both are.
     @discardableResult
-    func restoreBackup() async throws -> (added: Int, updated: Int) {
+    func restoreBackup() async throws -> RestoreResult {
         guard let walletAtStart = currentWalletAddress else { throw NextcloudError.noActiveWallet }
+        var addressBook: Data?
+        do {
+            addressBook = try await downloadFile(addressBookPath, maxBytes: 50_000_000)
+        } catch NextcloudError.httpError(404) {
+            addressBook = nil
+        }
+        let portfolio = try await downloadPortfolioBackup()
+        guard addressBook != nil || portfolio != nil else { throw NextcloudError.backupNotFound }
+        guard currentWalletAddress == walletAtStart else { throw CancellationError() }
+
+        var result = RestoreResult()
+        if let addressBook {
+            let imported = try AddressBookManager.shared.importExport(addressBook)
+            result.addressesAdded = imported.added
+            result.addressesUpdated = imported.updated
+        }
+        if let portfolio {
+            result.portfolioChanged = PortfolioViewModel.shared.importFromArchive(portfolio)
+        }
+        return result
+    }
+
+    /// The Portfolio backup on the server, or nil when there is none yet.
+    private func downloadPortfolioBackup() async throws -> PortfolioSync? {
         let data: Data
         do {
-            data = try await downloadFile(backupFilePath, maxBytes: 50_000_000)
+            data = try await downloadFile(portfolioPath, maxBytes: 50_000_000)
         } catch NextcloudError.httpError(404) {
-            throw NextcloudError.backupNotFound
+            return nil
         }
-        guard currentWalletAddress == walletAtStart else { throw CancellationError() }
-        let result = try AddressBookManager.shared.importExport(data)
-        return (result.added, result.updated)
+        return try PortfolioBackupFile.decode(data).sync
     }
 
-    /// The backup file's server-side metadata (nil = no backup yet, or it couldn't be read).
-    func fetchBackupInfo() async -> NextcloudFile? {
-        guard let listing = try? await listFolder(Self.backupFolderName) else { return nil }
-        return listing.first { $0.name == Self.backupFileName && !$0.isDirectory }
+    /// The backup files' server-side metadata (a nil file = not backed up yet, or unreadable).
+    struct BackupInfo: Equatable {
+        var addressBook: NextcloudFile?
+        var portfolio: NextcloudFile?
+
+        var isEmpty: Bool { addressBook == nil && portfolio == nil }
     }
 
-    private var backupFilePath: String { "\(Self.backupFolderName)/\(Self.backupFileName)" }
+    func fetchBackupInfo() async -> BackupInfo {
+        guard let listing = try? await listFolder(Self.backupFolderName) else { return BackupInfo() }
+        func file(_ name: String) -> NextcloudFile? { listing.first { $0.name == name && !$0.isDirectory } }
+        return BackupInfo(addressBook: file(Self.addressBookFileName), portfolio: file(Self.portfolioFileName))
+    }
+
+    private var addressBookPath: String { "\(Self.backupFolderName)/\(Self.addressBookFileName)" }
+    private var portfolioPath: String { "\(Self.backupFolderName)/\(Self.portfolioFileName)" }
 
     // MARK: - Connection
 
@@ -395,7 +460,7 @@ final class NextcloudService: ObservableObject {
     }
 
     /// Verifies the credentials against the OCS user endpoint (the cheapest authenticated call),
-    /// then persists them and restores the Address Book backup if the KaChat folder has one.
+    /// then persists them and restores the backup if the KaChat folder has one.
     /// Throws `badCredentials` on a 401 so the connect screen can say exactly what's wrong.
     func connect(serverInput: String, username: String, appPassword: String) async throws {
         guard !isOffForTestnet else { throw NextcloudError.offOnTestnet }
@@ -439,8 +504,20 @@ final class NextcloudService: ObservableObject {
 
         // A backup this account made on another device comes back by itself, once.
         Task { [weak self] in
-            guard let self, let result = try? await self.restoreBackup(), result.added + result.updated > 0 else { return }
-            self.syncStatusToast = String(format: AppLocalization.string("Restored %lld addresses from Nextcloud."), result.added + result.updated)
+            guard let self, let result = try? await self.restoreBackup(), result.changedAnything else { return }
+            self.syncStatusToast = Self.restoredToast(result)
+        }
+    }
+
+    /// The toast after the restore on connect.
+    private static func restoredToast(_ result: RestoreResult) -> String {
+        switch (result.addresses > 0, result.portfolioChanged) {
+        case (true, true):
+            return String(format: AppLocalization.string("Restored %lld addresses and your Portfolio from Nextcloud."), result.addresses)
+        case (true, false):
+            return String(format: AppLocalization.string("Restored %lld addresses from Nextcloud."), result.addresses)
+        default:
+            return AppLocalization.string("Restored your Portfolio from Nextcloud.")
         }
     }
 
@@ -466,7 +543,7 @@ final class NextcloudService: ObservableObject {
         account = nil
     }
 
-    // MARK: - Files in the KaChat folder (Address Book backup and export, Portfolio CSV)
+    // MARK: - Files in the KaChat folder (the backup, Address Book and Portfolio import / export)
 
     /// Uploads `data` as `filename` into the KaChat folder, creating it if it isn't there yet,
     /// and returns the stored path. A file of the same name is replaced.

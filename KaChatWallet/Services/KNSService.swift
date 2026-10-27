@@ -1575,7 +1575,7 @@ final class KNSProfileWriteService: ObservableObject {
         guard let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KasiaError.keychainError("Could not get private key")
         }
-        // KNS activity is funded and settled entirely on the main (identity) address - no
+        // KNS activity is funded and settled entirely on the chatting (identity) address - no
         // spending-address split, so nothing ends up scattered across two addresses.
         let fundingAddress = wallet.publicAddress
         let fundingPrivateKey = privateKey
@@ -1614,7 +1614,7 @@ final class KNSProfileWriteService: ObservableObject {
             let totalSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
             log("UTXO field=\(key.rawValue) total=\(fetchedUtxos.count) spendable=\(utxos.count) sumSompi=\(totalSompi)")
             guard !utxos.isEmpty else {
-                throw KasiaError.networkError("No spendable UTXOs available in your main address for this KNS update")
+                throw KasiaError.networkError("No spendable UTXOs available in your chatting address for this KNS update")
             }
 
             let (commitTx, commitContext) = try KasiaTransactionBuilder.buildKNSAddProfileCommitTx(
@@ -1722,7 +1722,7 @@ final class KNSDomainInscribeService: ObservableObject {
         guard let privateKey = walletManager.getPrivateKey() else {
             throw KasiaError.keychainError("Could not get private key")
         }
-        // KNS activity is funded and settled entirely on the main (identity) address - no
+        // KNS activity is funded and settled entirely on the chatting (identity) address - no
         // spending-address split, so nothing ends up scattered across two addresses.
         let fundingAddress = wallet.publicAddress
         let fundingPrivateKey = privateKey
@@ -1756,7 +1756,7 @@ final class KNSDomainInscribeService: ObservableObject {
         let fetchedUtxos = try await nodePool.getUtxosByAddresses([fundingAddress])
         let utxos = fetchedUtxos.filter { !$0.isCoinbase && $0.blockDaaScore > 0 }
         guard !utxos.isEmpty else {
-            throw KasiaError.networkError("No spendable UTXOs available in your main address for KNS inscription")
+            throw KasiaError.networkError("No spendable UTXOs available in your chatting address for KNS inscription")
         }
         log("UTXO domain=\(fullDomain) total=\(fetchedUtxos.count) spendable=\(utxos.count)")
 
@@ -1916,7 +1916,7 @@ final class KNSDomainTransferService: ObservableObject {
         AppLog.log("[KNS_TRANSFER] %@", message)
     }
 
-    /// Transfers a domain owned by the wallet's identity/main address by default. Pass
+    /// Transfers a domain owned by the wallet's identity/chatting address by default. Pass
     /// `fromSpendingAddressIndex` to instead transfer a domain owned by one of the wallet's
     /// spending-chain addresses: that address then acts as owner, funder, signer, and change
     /// target for the whole commit/reveal pair - mirroring how spending-address sends derive
@@ -1994,7 +1994,7 @@ final class KNSDomainTransferService: ObservableObject {
             sourceAddress = address
             sourcePrivateKey = key
         } else {
-            // KNS activity is funded and settled entirely on the identity/main address
+            // KNS activity is funded and settled entirely on the identity/chatting address
             // chain by default - same as submitAddProfile/inscribeDomain.
             guard let wallet = walletManager.currentWallet else {
                 throw KasiaError.walletNotFound
@@ -2068,7 +2068,7 @@ final class KNSDomainTransferService: ObservableObject {
         guard !utxos.isEmpty else {
             throw KasiaError.networkError(
                 fromSpendingAddressIndex == nil
-                ? "No spendable UTXOs available in your main address for KNS transfer"
+                ? "No spendable UTXOs available in your chatting address for KNS transfer"
                 : "No spendable UTXOs available in this spending address for KNS transfer"
             )
         }

@@ -34,8 +34,7 @@ import UserNotifications
 /// receive itself only while it is open; one that landed while it was away was the push's.
 ///
 /// Gated by Settings > Notifications > "Address Activity" (default ON) plus the master
-/// notification mode. Deliberately NOT gated by Simple Mode - Portfolio, Manage Addresses and
-/// Cold Storage all remain available there, and these are wallet notifications, not social.
+/// notification mode.
 ///
 @MainActor
 final class AddressActivityNotifier: ObservableObject {
@@ -130,7 +129,7 @@ final class AddressActivityNotifier: ObservableObject {
     }
 
     /// What the push service watches for this device's "Received" pushes (the register/update
-    /// `watch_only_addresses`): the main address, the spending addresses while their switch is
+    /// `watch_only_addresses`): the chatting address, the spending addresses while their switch is
     /// on, and every cold-storage address whose account notifies - the same choices the local
     /// notifications follow. Empty while Address Activity is off. The service keeps 200 at most.
     func pushWatchOnlyAddresses() -> [String] {
@@ -487,7 +486,7 @@ final class AddressActivityNotifier: ObservableObject {
 
     private func describe(address: String) -> String {
         if address == WalletManager.shared.currentWallet?.publicAddress {
-            return "Main address \(Self.shortAddress(address))"
+            return "Chatting address \(Self.shortAddress(address))"
         }
         if let accountLabel = coldLabelByAddress[address] {
             return "Cold storage (\(accountLabel)) \(Self.shortAddress(address))"
@@ -516,7 +515,6 @@ final class AddressActivityNotifier: ObservableObject {
     // MARK: - Gating
 
     /// Settings > Notifications > "Address Activity" plus the master notification mode.
-    /// Simple Mode intentionally not consulted - wallet notifications are allowed there.
     private var featureEnabled: Bool {
         let settings = AppSettings.load()
         return settings.addressActivityNotificationsEnabled && settings.notificationMode != .disabled
@@ -573,7 +571,7 @@ final class AddressActivityNotifier: ObservableObject {
         cachedNetworkKey = networkKey
     }
 
-    /// Addresses whose receives should NOTIFY: the main address, the spending addresses while
+    /// Addresses whose receives should NOTIFY: the chatting address, the spending addresses while
     /// their switch is on, and every cold-storage address whose account notifies.
     private func notifiableAddressSet(walletAddress: String) -> Set<String> {
         // Per account: the spending chain has its own switch, and each cold-storage account
@@ -597,7 +595,7 @@ final class AddressActivityNotifier: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: catchUpFloorsKey(wallet: wallet)),
               let floors = try? JSONDecoder().decode([String: UInt64].self, from: data),
               let floor = floors[address] else {
-            // The main address's floor used to be kept on its own, set when it was first tracked.
+            // The chatting address's floor used to be kept on its own, set when it was first tracked.
             guard address == wallet else { return nil }
             let legacy = UserDefaults.standard.double(forKey: "addr_activity_chat_floor_\(wallet.lowercased())")
             return legacy > 0 ? UInt64(legacy) : nil
@@ -618,7 +616,7 @@ final class AddressActivityNotifier: ObservableObject {
     private static var nowMs: UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
 
     /// Addresses that count as "ours" when they appear among a tx's INPUTS - superset of the
-    /// notifiable set: the main address + all spending + all cold storage, muted or not.
+    /// notifiable set: the chatting address + all spending + all cold storage, muted or not.
     private func ownInputAddressSet(walletAddress: String) -> Set<String> {
         var set = spendingAddressSet.union(coldLabelByAddress.keys)
         set.insert(walletAddress)

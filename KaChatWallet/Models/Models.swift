@@ -541,7 +541,7 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
         // Drawn as the ".kachat" wordmark (KachatTabIcon) in the dock; this symbol is only the
         // fallback.
         case .kachatNames: return "at"
-        case .settings: return "gear"
+        case .settings: return "gearshape"
         }
     }
 
@@ -558,19 +558,9 @@ enum AppTab: String, Codable, CaseIterable, Identifiable, Equatable, Hashable {
     /// The dock, in order: Wallet in the middle (owner's call, 2026-10-24), Settings last.
     static let dock: [AppTab] = [.portfolio, .coldStorage, .profile, .kachatNames, .settings]
 
-    /// Where the app opens and where it lands when the open tab goes away.
-    static let home: AppTab = .portfolio
-
-    /// True when this tab shows. Simple Mode (Settings > Security) hides .kachat: a marketplace,
-    /// buying and selling with real KAS.
-    func isEnabled(in settings: AppSettings) -> Bool {
-        self != .kachatNames || !settings.childModeEnabled
-    }
-
-    /// What the dock actually renders, in order.
-    static func visible(from settings: AppSettings) -> [AppTab] {
-        dock.filter { $0.isEnabled(in: settings) }
-    }
+    /// Where the app opens after logging in: Wallet, the middle of the dock (owner's call,
+    /// 2026-10-27).
+    static let home: AppTab = .profile
 }
 
 /// Block explorer used for "view transaction" links, matching Android's KaspaExplorer enum.
@@ -655,10 +645,6 @@ struct AppSettings: Codable {
     var currency: AppCurrency
 
     // Security
-    /// Simple Mode (Settings > Security): while on, the .kachat marketplace is hidden. Turning it
-    /// OFF is validated against the salted password hash in the Keychain (see ChildModeService) -
-    /// this flag alone is just the fast-path gate the UI reads.
-    var childModeEnabled: Bool
     var biometricSeedPhraseEnabled: Bool
     var biometricAccountLoginEnabled: Bool
     /// Gates the "Export" button on a spending address's own screen (Manage Addresses > tap an
@@ -780,7 +766,6 @@ struct AppSettings: Codable {
         case appearance
         case language
         case currency
-        case childModeEnabled
         case biometricSeedPhraseEnabled
         case biometricAccountLoginEnabled
         case biometricSpendingKeyEnabled
@@ -812,7 +797,6 @@ struct AppSettings: Codable {
         appearance: AppAppearance = .system,
         language: AppLanguage = .system,
         currency: AppCurrency = .usDollar,
-        childModeEnabled: Bool = false,
         biometricSeedPhraseEnabled: Bool = true,
         // Account-login biometrics are opt-in (off by default) on every platform.
         biometricAccountLoginEnabled: Bool = false,
@@ -838,7 +822,6 @@ struct AppSettings: Codable {
         self.appearance = appearance
         self.language = language
         self.currency = currency
-        self.childModeEnabled = childModeEnabled
         self.biometricSeedPhraseEnabled = biometricSeedPhraseEnabled
         self.biometricAccountLoginEnabled = biometricAccountLoginEnabled
         self.biometricSpendingKeyEnabled = biometricSpendingKeyEnabled
@@ -874,7 +857,6 @@ struct AppSettings: Codable {
         appearance = try container.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system
         language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
         currency = try container.decodeIfPresent(AppCurrency.self, forKey: .currency) ?? .usDollar
-        childModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .childModeEnabled) ?? false
         biometricSeedPhraseEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricSeedPhraseEnabled) ?? true
         biometricAccountLoginEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricAccountLoginEnabled) ?? false
         biometricSpendingKeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .biometricSpendingKeyEnabled) ?? true
@@ -939,7 +921,6 @@ struct AppSettings: Codable {
         try container.encode(appearance, forKey: .appearance)
         try container.encode(language, forKey: .language)
         try container.encode(currency, forKey: .currency)
-        try container.encode(childModeEnabled, forKey: .childModeEnabled)
         try container.encode(biometricSeedPhraseEnabled, forKey: .biometricSeedPhraseEnabled)
         try container.encode(biometricAccountLoginEnabled, forKey: .biometricAccountLoginEnabled)
         try container.encode(biometricSpendingKeyEnabled, forKey: .biometricSpendingKeyEnabled)

@@ -307,7 +307,7 @@ final class WalletManager: ObservableObject {
     }
 
     /// - Parameter chattingAddressIndex: derivation index on the identity chain
-    ///   (m/44'/111111'/0'/0/<index>) the main address should live at. 0 (the default) is the
+    ///   (m/44'/111111'/0'/0/<index>) the chatting address should live at. 0 (the default) is the
     ///   standard identity every fresh import/create starts from; a nonzero value is only ever
     ///   passed by `setChattingAddress(index:)` when the user picks a different identity index
     ///   during the import wizard. Persisted per derived address so key-repair and
@@ -322,7 +322,7 @@ final class WalletManager: ObservableObject {
             throw KasiaError.invalidSeedPhrase
         }
         guard chattingAddressIndex >= 0 else {
-            throw KasiaError.apiError("Invalid main address index")
+            throw KasiaError.apiError("Invalid chatting address index")
         }
 
         // Stop any in-flight sync/polling for the *previous* wallet before this new wallet becomes
@@ -440,8 +440,8 @@ final class WalletManager: ObservableObject {
             }
         }
 
-        // The Secure Enclave key wraps every saved account's snapshot (and the device id, the
-        // Simple Mode password record and .kachat commit salts): it goes only with the last
+        // The Secure Enclave key wraps every saved account's snapshot (and the device id and
+        // .kachat commit salts): it goes only with the last
         // account. Otherwise only this account's keys and snapshot are removed.
         let otherAccountsRemain = savedAccounts.contains { saved in
             walletAddressToDelete.map { !Self.isSameAccount(saved.publicAddress, $0) } ?? true
@@ -1016,7 +1016,7 @@ final class WalletManager: ObservableObject {
         return identityPrivateKey(at: UInt32(currentChattingAddressIndex), baseNode: baseNode, family: currentWalletSourceFamily)
     }
 
-    /// The main address a seed would produce with `passphrase`, without committing anything.
+    /// The chatting address a seed would produce with `passphrase`, without committing anything.
     ///
     /// Exists for the passphrase step, where seeing address #0 change as you type is the only
     /// direct evidence that a passphrase opens a DIFFERENT account rather than unlocking the same
@@ -1332,7 +1332,7 @@ final class WalletManager: ObservableObject {
     // An imported seed may hold its real identity at a nonzero index on the identity chain
     // (m/44'/111111'/0'/0/<index>) - e.g. the user's KNS domain sits on index 45 in another
     // wallet. The Welcome Guide's funding step (import runs only) lets the user scan that chain
-    // and pick a different index as their main address. The chosen index is persisted in
+    // and pick a different index as their chatting address. The chosen index is persisted in
     // UserDefaults keyed by the DERIVED address, so every path that re-derives from the seed
     // (getPrivateKey's fallback, reconcileWalletWithLocalKeyMaterialIfNeeded's repair) can find
     // the right index from the wallet record it already has. The keychain-stored private key is
@@ -1354,12 +1354,12 @@ final class WalletManager: ObservableObject {
         "kachat_chatting_address_index_\(address)"
     }
 
-    /// Persisted identity-chain index for a derived main address (0 when never customized).
+    /// Persisted identity-chain index for a derived chatting address (0 when never customized).
     func chattingAddressIndex(for address: String) -> Int {
         UserDefaults.standard.object(forKey: chattingIndexKey(for: address)) as? Int ?? 0
     }
 
-    /// Identity-chain index of the active wallet's main address (0 = the standard identity).
+    /// Identity-chain index of the active wallet's chatting address (0 = the standard identity).
     var currentChattingAddressIndex: Int {
         guard let address = currentWallet?.publicAddress else { return 0 }
         return chattingAddressIndex(for: address)

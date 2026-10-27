@@ -4,11 +4,11 @@ import UIKit
 
 // MARK: - Funding card
 
-/// "Fund your main address": a QR of the main address and the address itself with a copy
+/// "Fund your chatting address": a QR of the chatting address and the address itself with a copy
 /// affordance.
 struct ZeroBalanceFundingCardView: View {
     let address: String?
-    /// The headline; nil = "Fund your main address".
+    /// The headline; nil = "Fund your chatting address".
     var title: String? = nil
     /// Called after the address hits the pasteboard so the host can show its own toast; when
     /// nil (sheet contexts without a toast helper) the copy icon flips to a checkmark instead.
@@ -20,7 +20,7 @@ struct ZeroBalanceFundingCardView: View {
     var body: some View {
         VStack(spacing: 14) {
             Group {
-                if let title { Text(verbatim: title) } else { Text("Fund your main address") }
+                if let title { Text(verbatim: title) } else { Text("Fund your chatting address") }
             }
                 .font(.subheadline.weight(.semibold))
                 .multilineTextAlignment(.center)

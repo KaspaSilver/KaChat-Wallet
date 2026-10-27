@@ -158,7 +158,7 @@ enum PortfolioLedgerStore {
         userDefaults.removeObject(forKey: tombstonesKey(forNormalizedWalletAddress: walletAddress))
     }
 
-    // MARK: - Nextcloud sync (NEXTCLOUD_SYNC.md section 5, Portfolios)
+    // MARK: - Nextcloud backup (deletions, so a merge never brings one back)
 
     private static let tombstonesKeyPrefix = "kachat_portfolio_tombstones_"
 
@@ -203,8 +203,8 @@ enum PortfolioLedgerStore {
     }
 }
 
-/// One wallet's portfolios as Nextcloud Automatic Sync carries them, and how two copies merge.
-/// Pure: the archive merge and the restore both use it. Per item the newest `updatedAt` wins,
+/// One wallet's portfolios as the Nextcloud backup carries them, and how two copies merge.
+/// Pure: the backup and the restore both use it. Per item the newest `updatedAt` wins,
 /// unless a tombstone at or after it deletes it; a transaction or fee lives only while its
 /// portfolio does.
 struct PortfolioSync: Equatable {
@@ -335,5 +335,41 @@ struct PortfolioSync: Equatable {
             fees: feeList.sorted { $0.id < $1.id },
             tombstones: tombstones
         )
+    }
+}
+
+/// The Portfolio backup on Nextcloud (`NextcloudService.portfolioFileName`): one wallet's
+/// `PortfolioSync` as plain JSON. Dates are kept exact (the default encoding), since a merge
+/// compares edit stamps.
+struct PortfolioBackupFile: Codable {
+    static let currentVersion = 1
+
+    var version = currentVersion
+    var exportedAt: Date
+    var portfolios: [Portfolio]
+    var transactions: [PortfolioTransaction]
+    var fees: [PortfolioFeeRecord]
+    var tombstones: [PortfolioTombstone]
+
+    init(_ sync: PortfolioSync, exportedAt: Date = Date()) {
+        self.exportedAt = exportedAt
+        portfolios = sync.portfolios
+        transactions = sync.transactions
+        fees = sync.fees
+        tombstones = sync.tombstones
+    }
+
+    var sync: PortfolioSync {
+        PortfolioSync(portfolios: portfolios, transactions: transactions, fees: fees, tombstones: tombstones)
+    }
+
+    func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
+    }
+
+    static func decode(_ data: Data) throws -> PortfolioBackupFile {
+        try JSONDecoder().decode(PortfolioBackupFile.self, from: data)
     }
 }

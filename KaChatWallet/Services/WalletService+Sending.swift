@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Sending: plain KAS transfers from the main address and the spending addresses
+// MARK: - Sending: plain KAS transfers from the chatting address and the spending addresses
 
 extension WalletService {
 
@@ -21,7 +21,7 @@ extension WalletService {
     }
 
     /// Sends a plain KAS transfer from the wallet's identity address to an arbitrary
-    /// recipient address (Profile > Main Address > Withdraw Kaspa). Unlike sendPayment,
+    /// recipient address (Profile > Chatting Address > Withdraw Kaspa). Unlike sendPayment,
     /// this carries no KaChat protocol payload and no extra bookkeeping
     /// (pending message, delivery status, etc.) since the recipient isn't necessarily a
     /// contact. Returns the submitted transaction id.

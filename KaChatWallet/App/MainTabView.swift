@@ -22,12 +22,10 @@ struct MainTabView: View {
     // Surfaces the Address Book's Nextcloud backup result as a toast over whatever tab is showing.
     @ObservedObject private var nextcloudService = NextcloudService.shared
 
-    /// The dock's TabView on its own, so `body` stays small enough for the type checker. Simple
-    /// Mode changes which tabs show, and a new arrangement builds a fresh tab bar (the key below):
-    /// reordering the same TabView left UIKit's tab items with stale images.
+    /// The dock's TabView on its own, so `body` stays small enough for the type checker.
     private var dockTabView: some View {
         TabView(selection: tabSelection) {
-            ForEach(AppTab.visible(from: settingsViewModel.settings)) { tab in
+            ForEach(AppTab.dock) { tab in
                 tabContent(for: tab)
                     .tabItem {
                         // Single Label whose VALUES vary (no structural if) - conditional tabItem
@@ -51,18 +49,13 @@ struct MainTabView: View {
             }
         }
         .tint(.accentColor)
-        .id(dockArrangementKey)
-    }
-
-    private var dockArrangementKey: String {
-        AppTab.visible(from: settingsViewModel.settings).map(\.rawValue).joined(separator: ",")
     }
 
     var body: some View {
         dockTabView
         // the bell has something unread: Profile's dock dot, from whichever tab is showing. Its
         // own modifier: inline, these pushed the body past what the type checker can solve.
-        .modifier(ProfileDockDotSync(selectedTab: selectedTab, dockTabs: AppTab.visible(from: settingsViewModel.settings)))
+        .modifier(ProfileDockDotSync(selectedTab: selectedTab, dockTabs: AppTab.dock))
         // a .kachat registration in flight: its progress half sheet, back up after a relaunch
         .modifier(KachatRegistrationPresenter())
         .toast(message: nextcloudService.syncStatusToast)
@@ -111,13 +104,6 @@ struct MainTabView: View {
             // best wallet surface when it's hidden.
             PendingTabRoute.pending = nil
             routeToWalletTab(.coldStorage)
-        }
-        .onChange(of: AppTab.visible(from: settingsViewModel.settings).map(\.tag)) { visibleTags in
-            // Simple Mode can remove the selected tab (.kachat) - a TabView whose selection points
-            // at a page that no longer exists renders a stuck black screen. Snap home instead.
-            if !visibleTags.contains(selectedTab) {
-                handleTabSelectionChange(AppTab.home.tag)
-            }
         }
     }
 
@@ -203,18 +189,13 @@ struct MainTabView: View {
         }
     }
 
-    /// Lands on a tab when it is in the dock (Simple Mode hides .kachat), else home.
     private func routeToFeature(_ feature: AppTab) {
-        let visible = AppTab.visible(from: settingsViewModel.settings)
-        selectedTab = visible.contains(feature) ? feature.tag : AppTab.home.tag
+        selectedTab = feature.tag
     }
 
-    /// Wallet-event notifications (address activity). `preferred` is the ideal tab; when it is
-    /// hidden, fall back to Portfolio and finally to the Wallet tab, which always shows.
-    private func routeToWalletTab(_ preferred: AppTab) {
-        let visible = AppTab.visible(from: settingsViewModel.settings)
-        let target = [preferred, .portfolio, .profile].first { visible.contains($0) } ?? .profile
-        handleTabSelectionChange(target.tag)
+    /// Wallet-event notifications (address activity): the tab that shows them.
+    private func routeToWalletTab(_ tab: AppTab) {
+        handleTabSelectionChange(tab.tag)
     }
 
     /// Cold-start replay of a notification tap's tab switch: the tap's NotificationCenter post
@@ -263,7 +244,7 @@ struct OwnAddressSheetTarget: Identifiable {
 }
 
 /// One of your own addresses, opened from a tapped "Received" notification on its History tab:
-/// the main address, a spending address or a cold-storage address, each on the same screen
+/// the chatting address, a spending address or a cold-storage address, each on the same screen
 /// you'd reach it through (Wallet, Manage Addresses, Cold Storage).
 struct OwnAddressHistorySheet: View {
     let address: String

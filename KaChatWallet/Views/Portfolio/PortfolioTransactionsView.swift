@@ -35,10 +35,10 @@ struct PortfolioTransactionsView<Header: View>: View {
     @State private var editingTransaction: PortfolioTransaction?
     @State private var showAddSheet = false
     @State private var showAddAddressSheet = false
-    @State private var showAddChooser = false
-    @State private var showImportExport = false
+    /// The floating +'s half sheet: every way to add to, import into or export this portfolio.
+    @State private var showActions = false
     @State private var showCsvImporter = false
-    /// Set for "Add Main Address": the address sheet imports this one straight away.
+    /// Set for "Add Chatting Address": the address sheet imports this one straight away.
     @State private var addAddressPreset: String?
     /// The transaction a long press is moving to another portfolio, while its sheet is up.
     @State private var movingTransaction: PortfolioTransaction?
@@ -85,8 +85,7 @@ struct PortfolioTransactionsView<Header: View>: View {
                     }
                 }
             } header: {
-                // Add + import/export live right on the section header now, replacing the old
-                // floating overlay buttons.
+                // Select lives here; adding, importing and exporting are under the floating +.
                 HStack(spacing: 16) {
                     Text("Transactions")
                         .font(.headline)
@@ -99,14 +98,17 @@ struct PortfolioTransactionsView<Header: View>: View {
                         selectToggleButton
                     } else {
                         selectToggleButton
-                        addTransactionButton
-                        importExportButton
                     }
                 }
                 .padding(.bottom, 2)
             }
         }
         .listStyle(.insetGrouped)
+        // room to scroll the last row out from under the floating +
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 72) }
+        .overlay(alignment: .bottomTrailing) {
+            if !isSelecting { actionsButton }
+        }
         .refreshable {
             await viewModel.refreshPriceAsync()
         }
@@ -130,8 +132,7 @@ struct PortfolioTransactionsView<Header: View>: View {
         .sheet(item: $editingTransaction) { tx in
             PortfolioTransactionEditor(viewModel: viewModel, existing: tx)
         }
-        .sheet(isPresented: $showAddChooser) { addChooserSheet }
-        .sheet(isPresented: $showImportExport) { importExportSheet }
+        .sheet(isPresented: $showActions) { actionsSheet }
         .sheet(item: $movingTransaction) { tx in moveSheet(tx) }
         .sheet(isPresented: $showAddAddressSheet) {
             AddPortfolioAddressSheet(viewModel: viewModel, presetAddress: addAddressPreset) { result in
@@ -164,9 +165,9 @@ struct PortfolioTransactionsView<Header: View>: View {
         .fileImporter(isPresented: $showCsvImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
             switch result {
             case .success(let url):
-                let count = viewModel.importCsv(from: url)
-                toastStyle = count > 0 ? .success : .error
-                showToast(count > 0 ? "Imported \(count) transaction\(count == 1 ? "" : "s")" : "Import failed. Check the CSV format", style: count > 0 ? .success : .error)
+                let result = viewModel.importCsv(from: url)
+                toastStyle = result.count > 0 ? .success : .error
+                showToast(importMessage(result), style: result.count > 0 ? .success : .error)
             case .failure:
                 toastStyle = .error
                 showToast("Import failed. Check the CSV format", style: .error)
@@ -230,6 +231,14 @@ struct PortfolioTransactionsView<Header: View>: View {
         csvExport = PortfolioCsvExport(url: url)
     }
 
+    /// The toast after a CSV import: how many rows, and into which portfolio.
+    private func importMessage(_ result: PortfolioViewModel.CsvImportResult) -> String {
+        guard result.count > 0 else { return AppLocalization.string("Import failed. Check the CSV format") }
+        let rows = result.count == 1 ? "1 transaction" : "\(result.count) transactions"
+        guard !result.portfolioNames.isEmpty else { return "Imported \(rows)" }
+        return "Imported \(rows) into \(result.portfolioNames.joined(separator: ", "))"
+    }
+
     private func localizedFormat(_ key: String, _ args: CVarArg...) -> String {
         String(format: AppLocalization.string(key), locale: AppLocalization.locale, arguments: args)
     }
@@ -272,11 +281,8 @@ struct PortfolioTransactionsView<Header: View>: View {
                 let local = dir.appendingPathComponent(UUID().uuidString + "-" + file.name)
                 try data.write(to: local, options: .atomic)
                 defer { try? FileManager.default.removeItem(at: local) }
-                let count = viewModel.importCsv(from: local)
-                showToast(
-                    count > 0 ? "Imported \(count) transaction\(count == 1 ? "" : "s")" : "Import failed. Check the CSV format",
-                    style: count > 0 ? .success : .error
-                )
+                let result = viewModel.importCsv(from: local)
+                showToast(importMessage(result), style: result.count > 0 ? .success : .error)
             } catch {
                 showToast(localizedFormat("Import from Nextcloud failed: %@", UserFacingError.message(for: error)), style: .error)
             }
@@ -424,21 +430,29 @@ struct PortfolioTransactionsView<Header: View>: View {
         .accessibilityLabel("Delete selected")
     }
 
-    private var addTransactionButton: some View {
+    /// The floating glass + in the bottom-right corner (the same button as the Wallet tab's send
+    /// arrow), opening the actions sheet.
+    private var actionsButton: some View {
         Button {
             Haptics.impact(.light)
-            showAddChooser = true
+            showActions = true
         } label: {
-            Image(systemName: "plus.circle.fill")
-                .font(.scaled(size: 22))
+            Image(systemName: "plus")
+                .font(.scaled(size: 22, weight: .semibold))
                 .foregroundColor(.accentColor)
+                .frame(width: 56, height: 56)
+                .background(
+                    Circle()
+                        .fill(.regularMaterial)
+                        .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                        .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
+                )
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Add to this portfolio")
+        .padding(.trailing, 20)
+        .padding(.bottom, 16)
+        .accessibilityLabel("Add, import or export")
     }
 
-    /// The two ways to put something in a portfolio. A sheet rather than a popup menu so each
-    /// can say what it does - "Add Kaspa Address" reads as a contact until you learn otherwise.
     /// Hold a transaction: move it to another portfolio. The row itself sits on top so it's clear
     /// what is moving; a portfolio that already holds the same on-chain transaction is offered
     /// but disabled, since moving it there would count it twice.
@@ -497,111 +511,102 @@ struct PortfolioTransactionsView<Header: View>: View {
         .presentationDragIndicator(.visible)
     }
 
-    private var addChooserSheet: some View {
-        VStack(spacing: 12) {
-            Text("Add to Portfolio")
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 4)
-            ActionSheetRow(
-                title: "Add Transaction",
-                subtitle: "Record a buy or a sell by hand.",
-                systemImage: "pencil"
-            ) {
-                showAddChooser = false
-                DispatchQueue.main.async { showAddSheet = true }
-            }
-            ActionSheetRow(
-                title: "Add Kaspa Address",
-                subtitle: "Track an address's balance as part of this portfolio.",
-                systemImage: "arrow.left.arrow.right"
-            ) {
-                showAddChooser = false
-                addAddressPreset = nil
-                DispatchQueue.main.async { showAddAddressSheet = true }
-            }
-            // One tap for the address KaChat itself spends from: its buys and sells, and every
-            // network fee it paid for the Fees Spent card.
-            if let chattingAddress = WalletManager.shared.currentWallet?.publicAddress {
+    /// The floating +'s half sheet: adding to this portfolio, then importing and exporting it. A
+    /// sheet rather than a popup menu so each row can say what it does - "Add Kaspa Address"
+    /// reads as a contact until you learn otherwise.
+    private var actionsSheet: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Portfolio")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                    .padding(.bottom, 4)
+
+                actionsSectionTitle("Add")
                 ActionSheetRow(
-                    title: "Add Main Address",
-                    subtitle: "Your main address's buys and sells, and every network fee it has paid.",
-                    systemImage: "bubble.left.and.bubble.right"
+                    title: "Add Transaction",
+                    subtitle: "Record a buy or a sell by hand.",
+                    systemImage: "pencil"
                 ) {
-                    showAddChooser = false
-                    addAddressPreset = chattingAddress
-                    DispatchQueue.main.async { showAddAddressSheet = true }
+                    openFromActions { showAddSheet = true }
+                }
+                ActionSheetRow(
+                    title: "Add Kaspa Address",
+                    subtitle: "Track an address's balance as part of this portfolio.",
+                    systemImage: "arrow.left.arrow.right"
+                ) {
+                    addAddressPreset = nil
+                    openFromActions { showAddAddressSheet = true }
+                }
+                // One tap for the address the wallet itself spends from: its buys and sells, and
+                // every network fee it paid for the Fees Spent card.
+                if let chattingAddress = WalletManager.shared.currentWallet?.publicAddress {
+                    ActionSheetRow(
+                        title: "Add Chatting Address",
+                        subtitle: "Your chatting address's buys and sells, and every network fee it has paid.",
+                        systemImage: "bubble.left.and.bubble.right"
+                    ) {
+                        addAddressPreset = chattingAddress
+                        openFromActions { showAddAddressSheet = true }
+                    }
+                }
+
+                actionsSectionTitle("Import & Export")
+                    .padding(.top, 8)
+                ActionSheetRow(
+                    title: "Import CSV",
+                    subtitle: "Read transactions in from a file.",
+                    systemImage: "square.and.arrow.down"
+                ) {
+                    openFromActions { showCsvImporter = true }
+                }
+                ActionSheetRow(
+                    title: "Export CSV",
+                    subtitle: "Write this portfolio's transactions out to a file.",
+                    systemImage: "square.and.arrow.up"
+                ) {
+                    showActions = false
+                    exportCsv()
+                }
+                if nextcloud.isConnected {
+                    ActionSheetRow(
+                        title: "Import from Nextcloud",
+                        subtitle: "Pick a CSV file from your Nextcloud.",
+                        systemImage: "icloud.and.arrow.down"
+                    ) {
+                        openFromActions { showNextcloudImporter = true }
+                    }
+                    ActionSheetRow(
+                        title: "Export to Nextcloud",
+                        subtitle: "Save the CSV to the KaChat folder in your Nextcloud.",
+                        systemImage: "icloud.and.arrow.up"
+                    ) {
+                        showActions = false
+                        exportToNextcloud()
+                    }
                 }
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.height(370)])
+        // Full height from the start: every option shows without dragging the sheet up.
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 
-    private var importExportButton: some View {
-        Button {
-            Haptics.impact(.light)
-            showImportExport = true
-        } label: {
-            Image(systemName: "square.and.arrow.up.on.square")
-                .font(.scaled(size: 17, weight: .semibold))
-                .foregroundColor(.accentColor)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Import or export")
+    private func actionsSectionTitle(_ title: LocalizedStringKey) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.secondary)
+            .textCase(.uppercase)
+            .padding(.leading, 4)
     }
 
-    private var importExportSheet: some View {
-        VStack(spacing: 12) {
-            Text("Import or Export")
-                .font(.headline)
-                .padding(.top, 20)
-                .padding(.bottom, 4)
-            ActionSheetRow(
-                title: "Import CSV",
-                subtitle: "Read transactions in from a file.",
-                systemImage: "square.and.arrow.down"
-            ) {
-                showImportExport = false
-                DispatchQueue.main.async { showCsvImporter = true }
-            }
-            ActionSheetRow(
-                title: "Export CSV",
-                subtitle: "Write this portfolio's transactions out to a file.",
-                systemImage: "square.and.arrow.up"
-            ) {
-                showImportExport = false
-                exportCsv()
-            }
-            if nextcloud.isConnected {
-                ActionSheetRow(
-                    title: "Import from Nextcloud",
-                    subtitle: "Pick a CSV file from your Nextcloud.",
-                    systemImage: "icloud.and.arrow.down"
-                ) {
-                    showImportExport = false
-                    DispatchQueue.main.async { showNextcloudImporter = true }
-                }
-                ActionSheetRow(
-                    title: "Export to Nextcloud",
-                    subtitle: "Save the CSV to the KaChat folder in your Nextcloud.",
-                    systemImage: "icloud.and.arrow.up"
-                ) {
-                    showImportExport = false
-                    exportToNextcloud()
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .presentationDetents([.height(nextcloud.isConnected ? 450 : 280)])
-        .presentationDragIndicator(.visible)
+    /// Closes the actions sheet, then presents what a row opens - one sheet at a time.
+    private func openFromActions(_ present: @escaping () -> Void) {
+        showActions = false
+        DispatchQueue.main.async { present() }
     }
 
     /// Manual build via a plain symbol prefix rather than `.formatted(.currency(code:))` - the
@@ -668,7 +673,7 @@ private struct PortfolioCsvShareSheet: UIViewControllerRepresentable {
 /// stored (rows dedupe/group purely by `sourceAddress`).
 private struct AddPortfolioAddressSheet: View {
     @ObservedObject var viewModel: PortfolioViewModel
-    /// "Add Main Address": no field to fill - the import of this address starts as the
+    /// "Add Chatting Address": no field to fill - the import of this address starts as the
     /// sheet opens, and the sheet shows only its progress.
     var presetAddress: String? = nil
     let onCompletion: (Result<PortfolioAddressImporter.ImportResult, PortfolioAddressImporter.ImportError>) -> Void
@@ -764,7 +769,7 @@ private struct AddPortfolioAddressSheet: View {
                     }
                 }
             }
-            .navigationTitle(presetAddress == nil ? "Add Kaspa Address" : "Add Main Address")
+            .navigationTitle(presetAddress == nil ? "Add Kaspa Address" : "Add Chatting Address")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

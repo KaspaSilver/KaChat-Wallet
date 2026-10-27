@@ -1079,7 +1079,8 @@ final class PortfolioViewModel: ObservableObject {
     /// The ledger as last saved, so a save can tell what changed (stamped) and what went.
     private var savedTransactions: [PortfolioTransaction] = []
 
-    /// Saves the ledger: rows added or edited are stamped, rows gone are recorded as deleted.
+    /// Saves the ledger: rows added or edited are stamped, rows gone are recorded as deleted, and
+    /// the Nextcloud backup is marked to upload.
     private func persist() {
         let result = PortfolioLedgerStore.stamped(previous: savedTransactions, current: transactions, now: Date()) { $0.updatedAt = $1 }
         if result.items != transactions { transactions = result.items }
@@ -1089,10 +1090,12 @@ final class PortfolioViewModel: ObservableObject {
         )
         PortfolioLedgerStore.save(transactions, walletAddress: activeWalletAddress)
         savedTransactions = transactions
+        NextcloudService.shared.noteBackupDataChanged()
     }
 
     private func persistFees() {
         PortfolioLedgerStore.saveFees(fees, walletAddress: activeWalletAddress)
+        NextcloudService.shared.noteBackupDataChanged()
     }
 
     /// Re-reads this wallet's ledger after a Nextcloud restore wrote a merged one.
@@ -1114,19 +1117,21 @@ final class PortfolioViewModel: ObservableObject {
         )
     }
 
-    /// A restore: merges the archive's portfolios into this wallet's (newest edit or deletion
-    /// wins per item) and reloads.
-    func importFromArchive(_ incoming: PortfolioSync) {
-        guard let wallet = activeWalletAddress, !incoming.isEmpty else { return }
+    /// A restore: merges the backup's portfolios into this wallet's (newest edit or deletion
+    /// wins per item) and reloads. Returns whether anything here changed.
+    @discardableResult
+    func importFromArchive(_ incoming: PortfolioSync) -> Bool {
+        guard let wallet = activeWalletAddress, !incoming.isEmpty else { return false }
         let merged = PortfolioSync.merge([syncState, incoming])
-        // compared in the merge's own order, so an archive that adds nothing writes nothing
-        guard merged != PortfolioSync.merge([syncState]), !merged.portfolios.isEmpty else { return }
+        // compared in the merge's own order, so a backup that adds nothing writes nothing
+        guard merged != PortfolioSync.merge([syncState]), !merged.portfolios.isEmpty else { return false }
         PortfolioLedgerStore.savePortfolios(merged.portfolios, walletAddress: wallet)
         PortfolioLedgerStore.save(merged.transactions, walletAddress: wallet)
         PortfolioLedgerStore.saveFees(merged.fees, walletAddress: wallet)
         PortfolioLedgerStore.saveTombstones(merged.tombstones, walletAddress: wallet)
         PortfolioManager.shared.reloadFromStore()
         reloadFromStore()
+        return true
     }
 
     /// A deleted portfolio's rows and fees, out of memory as well as off disk - otherwise the
@@ -1155,9 +1160,11 @@ final class PortfolioViewModel: ObservableObject {
 
     /// Column order matches CoinMarketCap's portfolio Transaction History export exactly:
     /// `Date (UTC±H:MM),Token,Type,Price (USD),Amount,Total value (USD),Fee,Fee Currency,Notes`
-    /// — so a file exported from CoinMarketCap imports here unmodified, and a file exported
-    /// from here imports back into CoinMarketCap unmodified.
+    /// — so a file exported from CoinMarketCap imports here unmodified. An export from here adds
+    /// one last column, `Portfolio`, with the portfolio's name on every row, so an import puts the
+    /// rows back into the portfolio of that name (`importCsv`).
     private static let trackedToken = "KAS"
+    private static let portfolioColumn = "Portfolio"
 
     /// CoinMarketCap formats numeric columns with thousands-separator commas above 999 (e.g.
     /// "10,597.25", "6,093,184.09"), which plain `Double(_:)` rejects outright — parsing every
@@ -1213,13 +1220,16 @@ final class PortfolioViewModel: ObservableObject {
 
     func exportCsvURL() -> URL? {
         let dateFormatter = Self.makeDateFormatter(timeZone: TimeZone(identifier: "UTC") ?? .current)
-        var csv = "Date (UTC+0:00),Token,Type,Price (USD),Amount,Total value (USD),Fee,Fee Currency,Notes\n"
+        let manager = PortfolioManager.shared
+        let portfolioName = (manager.portfolios.first { $0.id == manager.activePortfolioId }?.name ?? "")
+            .replacingOccurrences(of: "\"", with: "\"\"")
+        var csv = "Date (UTC+0:00),Token,Type,Price (USD),Amount,Total value (USD),Fee,Fee Currency,Notes,\(Self.portfolioColumn)\n"
         for tx in scopedTransactions.sorted(by: { $0.timestamp < $1.timestamp }) {
             let date = dateFormatter.string(from: tx.timestamp)
             let amount = tx.amountKas
             let price = amount != 0 ? tx.fiatValue / amount : 0
             let notes = (tx.notes ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            csv += "\"\(date)\",\"\(Self.trackedToken)\",\"\(tx.type.rawValue)\",\"\(price)\",\"\(amount)\",\"\(tx.fiatValue)\",\"0.00\",\"USD\",\"\(notes)\"\n"
+            csv += "\"\(date)\",\"\(Self.trackedToken)\",\"\(tx.type.rawValue)\",\"\(price)\",\"\(amount)\",\"\(tx.fiatValue)\",\"0.00\",\"USD\",\"\(notes)\",\"\(portfolioName)\"\n"
         }
 
         let exportDir = FileManager.default.temporaryDirectory.appendingPathComponent("portfolio_exports", isDirectory: true)
@@ -1245,35 +1255,55 @@ final class PortfolioViewModel: ObservableObject {
     /// USD — added for buys, subtracted for sells — since the ledger doesn't track fee as a
     /// separate line item. A row whose timestamp exactly matches an existing transaction
     /// replaces it in place (same id, new data) rather than adding a duplicate — re-importing
-    /// a corrected or re-exported CSV updates the ledger instead of piling up copies. Returns
-    /// the number of rows imported or replaced.
-    /// Imports into whichever portfolio is currently active. Timestamp-match-and-replace only
-    /// considers that portfolio's own rows (not the whole wallet's, which may now include other
-    /// portfolios' transactions) — otherwise a row could get silently reassigned or overwritten
-    /// across portfolios just because two unrelated ledgers happen to share a timestamp.
-    func importCsv(from url: URL) -> Int {
-        guard let activePortfolioId = PortfolioManager.shared.activePortfolioId else { return 0 }
+    /// a corrected or re-exported CSV updates the ledger instead of piling up copies.
+    ///
+    /// Which portfolio: a row's `Portfolio` column (an export from here) names it. The portfolio
+    /// of that name is used (any case), else this wallet's untouched "Portfolio 1" takes the name,
+    /// else a new one is made - unless the wallet is at its limit, when the active portfolio gets
+    /// the rows. A row with no name (a CoinMarketCap file) goes into the active portfolio. The
+    /// portfolio imported into becomes the active one. Timestamp-match-and-replace only considers
+    /// the target portfolio's own rows - otherwise a row could get silently reassigned or
+    /// overwritten across portfolios just because two unrelated ledgers share a timestamp.
+    func importCsv(from url: URL) -> CsvImportResult {
+        guard let activePortfolioId = PortfolioManager.shared.activePortfolioId else { return CsvImportResult() }
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
 
         guard let data = try? Data(contentsOf: url),
               let content = String(data: data, encoding: .utf8) else {
-            return 0
+            return CsvImportResult()
         }
 
         // Whole records, not lines: a note can hold line breaks, which the export writes inside
         // its quotes. Splitting the file on every newline first cut such a row in two.
         var records = Self.parseCsvRecords(content)
-        guard !records.isEmpty else { return 0 }
-        let header = records.removeFirst().joined(separator: ",")
+        guard !records.isEmpty else { return CsvImportResult() }
+        let headerFields = records.removeFirst()
+        let header = headerFields.joined(separator: ",")
         let dateFormatter = Self.makeDateFormatter(timeZone: Self.parseHeaderUTCOffset(header))
+        let nameColumn = headerFields.firstIndex {
+            $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(Self.portfolioColumn) == .orderedSame
+        }
 
-        var indexByTimestamp: [Date: Int] = [:]
-        for (index, tx) in transactions.enumerated() where tx.portfolioId == activePortfolioId {
-            indexByTimestamp[tx.timestamp] = index
+        // Per named portfolio, where its rows go; resolved once per name.
+        var targetByName: [String: UUID] = [:]
+        func target(for fields: [String]) -> UUID {
+            guard let nameColumn, fields.count > nameColumn else { return activePortfolioId }
+            let name = fields[nameColumn].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return activePortfolioId }
+            if let id = targetByName[name.lowercased()] { return id }
+            let id = resolveImportPortfolio(named: name) ?? activePortfolioId
+            targetByName[name.lowercased()] = id
+            return id
+        }
+
+        var indexByTimestamp: [UUID: [Date: Int]] = [:]
+        for (index, tx) in transactions.enumerated() {
+            indexByTimestamp[tx.portfolioId, default: [:]][tx.timestamp] = index
         }
 
         var imported = 0
+        var targets: [UUID] = []
         for fields in records {
             guard fields.count >= 6 else { continue }
 
@@ -1302,9 +1332,11 @@ final class PortfolioViewModel: ObservableObject {
                 }
             }
 
-            let notes = fields.count > 8 && !fields[8].isEmpty ? fields[8] : nil
+            let notes = fields.count > 8 && !fields[8].isEmpty && nameColumn != 8 ? fields[8] : nil
+            let portfolioId = target(for: fields)
+            if !targets.contains(portfolioId) { targets.append(portfolioId) }
 
-            if let existingIndex = indexByTimestamp[timestamp] {
+            if let existingIndex = indexByTimestamp[portfolioId]?[timestamp] {
                 transactions[existingIndex] = PortfolioTransaction(
                     id: transactions[existingIndex].id,
                     type: type,
@@ -1312,7 +1344,7 @@ final class PortfolioViewModel: ObservableObject {
                     fiatValue: fiatValue,
                     timestamp: timestamp,
                     notes: notes,
-                    portfolioId: activePortfolioId
+                    portfolioId: portfolioId
                 )
             } else {
                 transactions.append(
@@ -1323,10 +1355,10 @@ final class PortfolioViewModel: ObservableObject {
                         fiatValue: fiatValue,
                         timestamp: timestamp,
                         notes: notes,
-                        portfolioId: activePortfolioId
+                        portfolioId: portfolioId
                     )
                 )
-                indexByTimestamp[timestamp] = transactions.count - 1
+                indexByTimestamp[portfolioId, default: [:]][timestamp] = transactions.count - 1
             }
             imported += 1
         }
@@ -1336,8 +1368,35 @@ final class PortfolioViewModel: ObservableObject {
             // A re-imported export can carry rows whose price was still loading when it was
             // written - price them by their date like any other.
             startPriceBackfillIfNeeded()
+            // Show where the rows went.
+            if let first = targets.first { PortfolioManager.shared.setActivePortfolio(first) }
         }
-        return imported
+        let names = targets.compactMap { id in PortfolioManager.shared.portfolios.first { $0.id == id }?.name }
+        return CsvImportResult(count: imported, portfolioNames: names)
+    }
+
+    struct CsvImportResult {
+        var count = 0
+        /// The portfolios the rows went into, in file order.
+        var portfolioNames: [String] = []
+    }
+
+    /// The portfolio a CSV row naming `name` goes into: the one of that name (any case), else
+    /// the wallet's untouched "Portfolio 1" renamed to it, else a new one. Nil at the portfolio
+    /// limit (the caller uses the active portfolio).
+    private func resolveImportPortfolio(named name: String) -> UUID? {
+        let manager = PortfolioManager.shared
+        if let existing = manager.portfolios.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(name) == .orderedSame
+        }) {
+            return existing.id
+        }
+        if manager.portfolios.count == 1, let only = manager.portfolios.first,
+           PortfolioSync.isPristineSeed(only, transactions: transactions, fees: fees) {
+            manager.renamePortfolio(only.id, to: name)
+            return only.id
+        }
+        return manager.addPortfolio(name: name, makeActive: false)?.id
     }
 
     /// Fetches `address`'s on-chain transaction history and adds new buy/sell rows (see

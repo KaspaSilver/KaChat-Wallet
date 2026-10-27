@@ -68,7 +68,7 @@ struct KNSCreateProfileFlowView: View {
     private static let minimumFundingBalanceKas: Decimal = 50
 
     @State private var step: Step = .haveDomain
-    /// Domains found on the main address, refreshed by the transfer screen's Refresh button.
+    /// Domains found on the chatting address, refreshed by the transfer screen's Refresh button.
     @State private var foundDomains: [KNSDomain] = []
     @State private var isScanningDomains = false
     private let qrContext = CIContext()
@@ -150,7 +150,7 @@ struct KNSCreateProfileFlowView: View {
         }
     }
 
-    /// Re-reads the domains sitting on the main address. Bypasses the cache: the whole point
+    /// Re-reads the domains sitting on the chatting address. Bypasses the cache: the whole point
     /// of the Refresh button is to see a transfer that just landed.
     private func scanForDomains() async {
         isScanningDomains = true
@@ -172,7 +172,7 @@ struct KNSCreateProfileFlowView: View {
         case .checkingFunds:
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Checking your main address balance...")
+                Text("Checking your chatting address balance...")
                     .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -287,7 +287,7 @@ struct KNSCreateProfileFlowView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.scaled(size: 56))
                 .foregroundColor(.accentColor)
-            Text(localizedFormat("Please fund your main address with at least %@ Kaspa to continue.", Self.formatKas(Self.minimumFundingBalanceKas)))
+            Text(localizedFormat("Please fund your chatting address with at least %@ Kaspa to continue.", Self.formatKas(Self.minimumFundingBalanceKas)))
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -301,7 +301,7 @@ struct KNSCreateProfileFlowView: View {
             }
 
             VStack(spacing: 4) {
-                Text("Main address")
+                Text("Chatting address")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Button {
@@ -320,7 +320,7 @@ struct KNSCreateProfileFlowView: View {
             }
 
             // Reuses the same white-background QR view every other "receive" surface in the
-            // app uses (Profile tab's Accept Kaspa/Main Address buttons) rather than a
+            // app uses (Profile tab's Accept Kaspa/Chatting Address buttons) rather than a
             // one-off, so someone with a second device - or helping in person - can scan and
             // send right from this screen.
             NavigationLink {
@@ -522,7 +522,7 @@ struct KNSCreateProfileFlowView: View {
                 }
 
                 VStack(spacing: 4) {
-                    Text("Main address")
+                    Text("Chatting address")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Button {

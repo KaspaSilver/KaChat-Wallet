@@ -184,7 +184,7 @@ enum KaChatInternalLink: Equatable {
 /// - the address without `kaspa:` on mainnet (like profile links), with `kaspatest:` on testnet;
 /// - `amount` in KAS, at most 8 decimals, "." as the separator;
 /// - `memo` optional, at most `memoLimit` characters;
-/// - `chat=1` when the address is the requester's KaChat main address: KaChat pays it as a
+/// - `chat=1` when the address is the requester's KaChat chatting address: KaChat pays it as a
 ///   chat payment with the memo in it; the wallet pays it as a plain transfer, the memo only
 ///   telling the payer what it is for.
 /// - `by` + `sig`: who made it - the maker's main (chatting) address, which has an identity (a
@@ -200,7 +200,7 @@ struct PaymentRequest: Equatable, Identifiable {
     let amountSompi: UInt64
     let memo: String
     let toChattingAddress: Bool
-    /// The main address that signed the request - verified, or nil.
+    /// The chatting address that signed the request - verified, or nil.
     let creator: String?
     /// The creator's Schnorr signature over `signingDigest(creator:)`.
     let signature: Data?

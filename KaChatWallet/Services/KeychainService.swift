@@ -217,26 +217,15 @@ final class KeychainService {
         "kachat_names_commit_salt_\(walletHashSuffix(walletAddress.lowercased()))_\(id)"
     }
 
-    // MARK: - Simple Mode password record (device-specific, SE-wrapped)
-    //
-    // Opaque blob owned by ChildModeService: a JSON {salt, SHA-256(salt || password)} record -
-    // never the plaintext password. Device-scoped + Secure Enclave-wrapped like the seed phrase,
-    // so it can't sync off this device.
+    // MARK: - Retired Simple Mode password record
 
-    func saveChildModePasswordRecord(_ data: Data) throws {
-        try saveSensitiveData(data, baseKey: .childModePassword)
-    }
-
-    func loadChildModePasswordRecord() throws -> Data? {
-        try loadSensitiveData(baseKey: .childModePassword)
-    }
-
-    func deleteChildModePasswordRecord() throws {
-        try deleteSensitiveData(baseKey: .childModePassword)
-    }
-
-    func hasChildModePasswordRecord() -> Bool {
-        (try? loadSensitiveData(baseKey: .childModePassword)) != nil
+    /// Simple Mode (a password-locked mode that hid .kachat) was removed on 2026-10-27; this
+    /// deletes a password record an older build left in the Keychain. Once per install.
+    func deleteRetiredSimpleModePasswordIfNeeded() {
+        let doneKey = "kachat_simple_mode_password_removed"
+        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
+        try? deleteSensitiveData(baseKey: .childModePassword)
+        UserDefaults.standard.set(true, forKey: doneKey)
     }
 
     // MARK: - Wallet

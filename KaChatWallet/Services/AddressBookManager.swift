@@ -76,7 +76,7 @@ final class AddressBookManager: ObservableObject {
 
     /// How the app shows `address`: the name you saved for it; else who it is on chain (its
     /// `.kachat` name on testnet, its KNS domain elsewhere); else the short address. Your own
-    /// main address always goes by who you are on chain.
+    /// chatting address always goes by who you are on chain.
     func displayName(for address: String) -> String {
         let isOwn = address.lowercased() == WalletManager.shared.currentWallet?.publicAddress.lowercased()
         if !isOwn, let saved = entry(for: address)?.customName { return saved }
@@ -244,7 +244,7 @@ final class AddressBookManager: ObservableObject {
         if let root = Self.photosRoot { try? FileManager.default.removeItem(at: root) }
         photoCache.removeAllObjects()
         photoVersion &+= 1
-        if walletAddress != nil { NextcloudService.shared.noteAddressBookChanged() }
+        if walletAddress != nil { NextcloudService.shared.noteBackupDataChanged() }
     }
 
     private nonisolated static var photosRoot: URL? {
@@ -475,7 +475,7 @@ final class AddressBookManager: ObservableObject {
 
     /// A user edit: names in notifications and the share sheet follow, and the backup owes an upload.
     private func didChange() {
-        NextcloudService.shared.noteAddressBookChanged()
+        NextcloudService.shared.noteBackupDataChanged()
     }
 
     private func persist() {

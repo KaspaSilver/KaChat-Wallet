@@ -168,7 +168,7 @@ actor GRPCStreamConnection {
     /// no request id to correlate on, so FIFO-by-type is the only correlation available. That
     /// is correct only while a single request of a type is outstanding: with two concurrent
     /// ones, whichever response arrives first is handed to whichever request was sent first,
-    /// so the answers cross. Two balance reads issued together (the main address and the
+    /// so the answers cross. Two balance reads issued together (the chatting address and the
     /// spending address, both `getUtxosByAddresses`) could therefore each receive the other's
     /// UTXOs, which is what made the two balances swap on screen.
     ///

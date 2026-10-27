@@ -183,7 +183,7 @@ final class KachatNamesActions: ObservableObject {
         return Signer(address: address, privateKey: key, me: me)
     }
 
-    /// The current wallet's main address and key on the network the app runs on - the
+    /// The current wallet's chatting address and key on the network the app runs on - the
     /// profile record's signer. Unlike `signer()` it isn't testnet-only: profiles work on mainnet
     /// before its registry launches (`KachatNamesService.profilesEnabled`).
     func profileSigner() throws -> Signer {
@@ -228,7 +228,7 @@ final class KachatNamesActions: ObservableObject {
     /// The signer for `op`. Owner-only actions (transfer, list/delist, accept, release) on a name
     /// held by one of this wallet's spending addresses sign - and pay their fee - from that
     /// address. Everything else, including extend and renew (anyone may pay those), uses the
-    /// main address.
+    /// chatting address.
     private func signer(for op: Operation) throws -> Signer {
         let heldBy: Data?
         switch op {
@@ -247,7 +247,7 @@ final class KachatNamesActions: ObservableObject {
         case .withdraw(let o), .refund(let o):
             if let mine = try? ownerSigner(o.buyer) { return mine }
             return try signer()
-        // paid by, and (buy, offer) belonging to, the main address
+        // paid by, and (buy, offer) belonging to, the chatting address
         case .buy, .offer, .extend, .renew:
             return try buyerSigner()
         default:
@@ -267,7 +267,7 @@ final class KachatNamesActions: ObservableObject {
         return Signer(address: address.lowercased(), privateKey: key, me: me)
     }
 
-    /// The signer for whichever of this wallet's addresses holds `owner` (the main address or
+    /// The signer for whichever of this wallet's addresses holds `owner` (the chatting address or
     /// a spending address) - a claim in progress keeps the address it was started from.
     private func ownerSigner(_ owner: Data) throws -> Signer {
         switch ownAddress(of: owner) {
@@ -278,7 +278,7 @@ final class KachatNamesActions: ObservableObject {
     }
 
     /// Who buys: claims, purchases, offers, extend and renew always pay from - and a new name
-    /// always belongs to - the main address (owner's call, 2026-10-21: no Buy From picker).
+    /// always belongs to - the chatting address (owner's call, 2026-10-21: no Buy From picker).
     /// Names an earlier build bought from a spending address keep that owner, and the owner's
     /// own key still signs for them (`signer(for:)`, `ownAddress(of:)`).
     func buyerSigner() throws -> Signer {
@@ -311,7 +311,7 @@ final class KachatNamesActions: ObservableObject {
 
     /// Spending addresses an earlier build bought with (the retired Buy From picker), per wallet:
     /// Your Domains and the marketplace still list the names and offers they hold next to the
-    /// main address's. Nothing adds to it any more.
+    /// chatting address's. Nothing adds to it any more.
     var marketAddresses: [String] {
         guard let key = marketAddressesKey else { return [] }
         return UserDefaults.standard.stringArray(forKey: key) ?? []
@@ -671,7 +671,7 @@ final class KachatNamesActions: ObservableObject {
         let total = plain.reduce(UInt64(0)) { $0 + $1.amount }
         let feeRoom: UInt64 = 5_000_000 // 0.05 KAS: the fee, with what's left coming back as change
         guard plain.count > 1, total > feeRoom * 2 else {
-            throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your main address for this."))
+            throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your chatting address for this."))
         }
         let daa = await NodePoolService.shared.currentVirtualDaaScore()
         let tx = try KasiaTransactionBuilder.buildPlainTransferTx(

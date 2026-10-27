@@ -24,6 +24,7 @@ struct KaChatApp: App {
         // A Testnet/Mainnet switch chosen in Settings takes effect here, before any service
         // reads the settings, so the whole app starts on one network (IOS-002).
         PendingNetworkSwitch.applyAtLaunch()
+        KeychainService.shared.deleteRetiredSimpleModePasswordIfNeeded()
         // Touch the (lazy) Nextcloud singleton so its lifecycle observers - the Address Book's
         // on-background backup and the launch catch-up - are registered from the first launch.
         _ = NextcloudService.shared
@@ -446,11 +447,12 @@ private struct PrivacyCoverView: View {
     var body: some View {
         ZStack {
             Rectangle().fill(.ultraThinMaterial)
-            Image("KaspaLogo")
+            // The wallet's own logo, rounded like its app icon.
+            Image("KaChatWalletLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 72, height: 72)
-                .opacity(0.9)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .ignoresSafeArea()
     }
