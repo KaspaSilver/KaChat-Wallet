@@ -73,6 +73,8 @@ struct ProfileView: View {
     @ObservedObject private var notifCenter = GlobalNotificationCenter.shared
     /// Donate: the Send screen, addressed to KaChat's donation address
     @State private var showDonateSheet = false
+    /// The floating up-arrow button: Send Kaspa, nothing filled in.
+    @State private var showSendKaspa = false
     private static let donateName = "kachat.kachat"
     /// The address Donate pays, pinned (IOS-067): a name is first-come, so resolving
     /// `kachat.kachat` would pay whoever registered it. This is the address `kachat.kas` has
@@ -91,6 +93,28 @@ struct ProfileView: View {
 
     static func preloadQRCode(for address: String) {
         ProfileQRCodeCache.preload(address: address, completion: nil)
+    }
+
+    /// The floating glass up arrow in the bottom-right corner, opening Send Kaspa.
+    private var sendKaspaButton: some View {
+        Button {
+            Haptics.impact(.light)
+            showSendKaspa = true
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.scaled(size: 22, weight: .semibold))
+                .foregroundColor(.accentColor)
+                .frame(width: 56, height: 56)
+                .background(
+                    Circle()
+                        .fill(.regularMaterial)
+                        .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
+                        .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
+                )
+        }
+        .padding(.trailing, 20)
+        .padding(.bottom, 16)
+        .accessibilityLabel(Text("Send Kaspa"))
     }
 
     var body: some View {
@@ -114,6 +138,8 @@ struct ProfileView: View {
                         helpSection
                         logOutSection
                         aboutSection(wallet)
+                        // room to scroll the last row out from under the floating send button
+                        Color.clear.frame(height: 56)
                     } else {
                         Text("No active account")
                             .foregroundColor(.secondary)
@@ -249,6 +275,18 @@ struct ProfileView: View {
                 }
             }
             .animation(.spring(response: 0.35, dampingFraction: 0.85), value: isSavingKNSProfile)
+            // Quick send: the floating glass button in the bottom-right corner (the same button
+            // Addresses uses for +). Out of the way while the KNS save banner is up.
+            .overlay(alignment: .bottomTrailing) {
+                if walletManager.currentWallet != nil, !isSavingKNSProfile, failedKNSUpdates.isEmpty {
+                    sendKaspaButton
+                }
+            }
+            .sheet(isPresented: $showSendKaspa) {
+                if let wallet = walletManager.currentWallet {
+                    WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi)
+                }
+            }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }

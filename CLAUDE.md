@@ -23,7 +23,7 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`) - KaChat's Profile, labelled "Wallet" in the dock with KaPosts' wallet icon (`AppTab.profile`); Settings opens from here |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`) - KaChat's Profile, labelled "Wallet" in the dock with KaPosts' wallet icon (`AppTab.profile`); Settings opens from here, and a floating up arrow (bottom right) opens Send Kaspa |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
 | Addresses | `AddressBookView` (`Views/Contacts/AddressBookView.swift`) - KaChat's Address Book, called "Addresses" |
 
