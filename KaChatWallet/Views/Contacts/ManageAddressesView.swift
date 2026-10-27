@@ -3,13 +3,13 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
 
-/// Every address of this account, reached from Profile > Manage Addresses: the chatting address
+/// Every address of this account, reached from Profile > Manage Addresses: the main address
 /// first, then the spending addresses, each with its balance and whether it was used, a
 /// "generate new address" action, rename, QR, hide. Which address a send comes from is picked on
 /// the send screen itself (From), so there is no "primary" here.
 struct ManageAddressesView: View {
     @EnvironmentObject var walletManager: WalletManager
-    @EnvironmentObject var chatService: ChatService
+    @EnvironmentObject var walletService: WalletService
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @ObservedObject private var activityNotifier = AddressActivityNotifier.shared
 
@@ -190,7 +190,7 @@ struct ManageAddressesView: View {
         }
     }
 
-    /// Every address: the total, the actions, then the chatting address, then the spending ones.
+    /// Every address: the total, the actions, then the main address, then the spending ones.
     @ViewBuilder
     private var addressesTabContent: some View {
         accountSummary
@@ -256,7 +256,7 @@ struct ManageAddressesView: View {
                 .foregroundColor(.secondary)
             Text("No Spending Addresses")
                 .font(.headline)
-            Text("Generate one below to start sending payments from a separate address than the one you chat from.")
+            Text("Generate one below to send payments from a separate address than your main one.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -265,7 +265,7 @@ struct ManageAddressesView: View {
         .padding(.vertical, 40)
     }
 
-    /// The chatting address, first in the list: it opens its own screen (history, UTXOs,
+    /// The main address, first in the list: it opens its own screen (history, UTXOs,
     /// Domains, Send / Receive), the same one Profile used to.
     private func chattingAddressRow(_ wallet: Wallet) -> some View {
         ZStack {
@@ -279,7 +279,7 @@ struct ManageAddressesView: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
-                        Text("Chatting Address")
+                        Text("Main Address")
                             .font(.caption)
                             .fontWeight(.medium)
                             .foregroundColor(.secondary)
@@ -391,7 +391,7 @@ struct ManageAddressesView: View {
         }
     }
 
-    /// Everything this account holds: the chatting address and every spending address, hidden
+    /// Everything this account holds: the main address and every spending address, hidden
     /// ones too - the same total as Profile's Manage Addresses card.
     private var totalBalanceSompi: UInt64 {
         (walletManager.currentWallet?.balanceSompi ?? 0) + entries.reduce(0) { $0 + $1.balanceSompi }
@@ -677,8 +677,8 @@ struct ManageAddressesView: View {
             var updated = entry
             if entry.balanceSompi > 0 {
                 updated.everUsed = true
-                chatService.markSpendingAddressUsed(entry.address)
-            } else if let cached = chatService.cachedSpendingAddressUsedState(entry.address) {
+                walletService.markSpendingAddressUsed(entry.address)
+            } else if let cached = walletService.cachedSpendingAddressUsedState(entry.address) {
                 updated.everUsed = cached
             } else {
                 updated.everUsed = previousUsed[entry.address] ?? false
@@ -702,7 +702,7 @@ struct ManageAddressesView: View {
         if !shieldCandidates.isEmpty {
             Task {
                 for entry in shieldCandidates {
-                    if await chatService.quantumAddressSpentState(entry.address) == true {
+                    if await walletService.quantumAddressSpentState(entry.address) == true {
                         quantumSpentAddresses.insert(entry.address.lowercased())
                     }
                 }
@@ -724,7 +724,7 @@ struct ManageAddressesView: View {
         await withTaskGroup(of: (String, Bool?).self) { group in
             for _ in 0..<concurrencyLimit {
                 guard let entry = pending.next() else { break }
-                group.addTask { (entry.address, await self.chatService.spendingAddressUsedState(entry.address)) }
+                group.addTask { (entry.address, await self.walletService.spendingAddressUsedState(entry.address)) }
             }
             while let (address, used) = await group.next() {
                 if let used {
@@ -737,7 +737,7 @@ struct ManageAddressesView: View {
                 // A failed probe stays in unknownUsedAddresses: the badge keeps showing
                 // "Checking" (never a possibly-wrong "Unused") and pull to refresh retries.
                 if let entry = pending.next() {
-                    group.addTask { (entry.address, await self.chatService.spendingAddressUsedState(entry.address)) }
+                    group.addTask { (entry.address, await self.walletService.spendingAddressUsedState(entry.address)) }
                 }
             }
         }
@@ -746,7 +746,7 @@ struct ManageAddressesView: View {
         walletManager.storeSpendingAddressListCache(entries)
 
         // Contains-domain tags, after the rows are already visible. refreshIfNeeded is the same
-        // batched KNS lookup ContactsManager.fetchKNSDomainsForAllContacts uses: capped
+        // batched KNS lookup: capped
         // concurrency, per-address debounce and failure cooldown, shared in-flight requests -
         // so re-opening this screen reads warm cache instead of re-firing a request burst.
         let addresses = baseEntries.map { $0.address }
@@ -856,7 +856,7 @@ struct ManageAddressesView: View {
     private func timedUsedProbe(_ address: String, deadline: Date) async -> Bool? {
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0.05 else { return nil }
-        let service = chatService
+        let service = walletService
         return await withTaskGroup(of: Bool?.self) { group in
             group.addTask { await service.spendingAddressUsedState(address) }
             group.addTask {
@@ -914,9 +914,9 @@ struct ManageAddressesView: View {
             var lastError: Error?
             for entry in entries where entry.index != activeIndex && entry.balanceSompi > 0 {
                 do {
-                    let maxSendable = try await chatService.estimateMaxSpendingAddressAmount(index: entry.index, toAddress: primaryAddress, extraFeeSompi: extraFeeSompi)
+                    let maxSendable = try await walletService.estimateMaxSpendingAddressAmount(index: entry.index, toAddress: primaryAddress, extraFeeSompi: extraFeeSompi)
                     guard maxSendable > 0 else { continue }
-                    let txId = try await chatService.sendFromSpendingAddress(index: entry.index, toAddress: primaryAddress, amountSompi: maxSendable, extraFeeSompi: extraFeeSompi)
+                    let txId = try await walletService.sendFromSpendingAddress(index: entry.index, toAddress: primaryAddress, amountSompi: maxSendable, extraFeeSompi: extraFeeSompi)
                     sentTxIds.append(txId)
                 } catch {
                     lastError = error
@@ -1003,7 +1003,7 @@ private struct ConsolidateToPrimaryConfirmView: View {
     }
 
     /// Extra priority tip on top of the base (Normal-tier) fee - same Normal/Fast/Priority
-    /// system as the chatting-address withdraw flow, applied per swept address here since a
+    /// system as the main-address withdraw flow, applied per swept address here since a
     /// consolidation can be several separate transactions.
     private var extraFeeSompi: UInt64 {
         if let customExtraFeeSompi { return customExtraFeeSompi }
@@ -1128,7 +1128,7 @@ private struct ConsolidateToPrimaryConfirmView: View {
     }
 
     /// Commits the manually-typed total fee. Values below the network-computed minimum are
-    /// clamped up to that minimum rather than rejected outright, matching the chatting-address
+    /// clamped up to that minimum rather than rejected outright, matching the main-address
     /// withdraw flow's identical behavior.
     private func commitCustomFee() {
         defer { isEditingFee = false }
@@ -1206,7 +1206,7 @@ private struct ConsolidateSuccessCard: View {
 }
 
 /// Scoped withdraw dialog for a single spending address — change stays on that same address
-/// (no rotation), unlike the auto-sweep-and-rotate behavior of a regular chat payment. Widened
+/// (no rotation), unlike the rotate-on-send behavior of the primary. Widened
 /// from `private` so ContactsView.swift's Profile-tab "Spending Address" dropdown can reuse it
 /// for the primary spending address rather than duplicating this whole flow.
 struct SpendingAddressWithdrawView: View {
@@ -1224,8 +1224,7 @@ struct SpendingAddressWithdrawView: View {
     var preloadedUtxos: [UTXO] = []
     let onComplete: () -> Void
 
-    @EnvironmentObject var chatService: ChatService
-    @EnvironmentObject var contactsManager: ContactsManager
+    @EnvironmentObject var walletService: WalletService
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var portfolioViewModel = PortfolioViewModel.shared
@@ -1284,7 +1283,7 @@ struct SpendingAddressWithdrawView: View {
 
     /// Extra priority tip on top of the base (Normal-tier) fee, for network congestion. A
     /// manually-entered custom fee (tapped on the Network Fee row) overrides the tier
-    /// multiplier until a tier is tapped again - same behavior as the chatting-address
+    /// multiplier until a tier is tapped again - same behavior as the main-address
     /// withdraw flow (ContactsView.WithdrawKaspaView).
     private var extraFeeSompi: UInt64 {
         guard let normalFeeSompi else { return 0 }
@@ -1303,7 +1302,7 @@ struct SpendingAddressWithdrawView: View {
     }
 
     /// The spending address this send comes from: `entry` (the primary, from Profile or the
-    /// Chats New sheet), unless another was picked from the Available pill for this one send.
+    /// Wallet tab), unless another was picked from the Available pill for this one send.
     /// The primary itself doesn't change.
     @State private var chosenSource: SpendingAddressEntry?
     @State private var showSourcePicker = false
@@ -1402,7 +1401,7 @@ struct SpendingAddressWithdrawView: View {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 guard !Task.isCancelled else { return }
                 do {
-                    let fee = try await chatService.estimateSpendingAddressWithdrawalFee(index: source.index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos, availableUtxos: isCompoundMode ? preloadedUtxos : [])
+                    let fee = try await walletService.estimateSpendingAddressWithdrawalFee(index: source.index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos, availableUtxos: isCompoundMode ? preloadedUtxos : [])
                     guard !Task.isCancelled else { return }
                     normalFeeSompi = fee
                 } catch {
@@ -1555,14 +1554,14 @@ struct SpendingAddressWithdrawView: View {
                     // send to exactly those inputs. This is why "Max" works even when the address has
                     // more UTXOs than a single tx can hold - it consolidates one batch; repeat to
                     // reduce further.
-                    let (maxSompi, utxos) = try await chatService.maxConsolidatableChunk(index: source.index, extraFeeSompi: tipSompi, availableUtxos: preloadedUtxos)
+                    let (maxSompi, utxos) = try await walletService.maxConsolidatableChunk(index: source.index, extraFeeSompi: tipSompi, availableUtxos: preloadedUtxos)
                     await MainActor.run {
                         manualUtxos = utxos
                         amountInput = fiatAmountState.setMaxKas(Double(maxSompi) / 100_000_000.0, priceInCurrency: portfolioViewModel.currentPriceUsd)
                         isEstimatingMax = false
                     }
                 } else {
-                    let maxSompi = try await chatService.estimateMaxSpendingAddressAmount(index: source.index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    let maxSompi = try await walletService.estimateMaxSpendingAddressAmount(index: source.index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                     await MainActor.run {
                         amountInput = fiatAmountState.setMaxKas(Double(maxSompi) / 100_000_000.0, priceInCurrency: portfolioViewModel.currentPriceUsd)
                         isEstimatingMax = false
@@ -1584,7 +1583,7 @@ struct SpendingAddressWithdrawView: View {
     }
 
     /// Commits the manually-typed total fee. Values below the network-computed minimum are
-    /// clamped up to that minimum rather than rejected outright, matching the chatting-address
+    /// clamped up to that minimum rather than rejected outright, matching the main-address
     /// withdraw flow's identical behavior.
     private func commitCustomFee() {
         defer { isEditingFee = false }
@@ -1603,7 +1602,7 @@ struct SpendingAddressWithdrawView: View {
         let tipSompi = extraFeeSompi
         Task {
             do {
-                let txId = try await chatService.sendFromSpendingAddress(index: source.index, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                let txId = try await walletService.sendFromSpendingAddress(index: source.index, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 await MainActor.run {
                     isSending = false
                     sentTransaction = SentTransaction(
@@ -1635,7 +1634,7 @@ struct SpendingAddressWithdrawView: View {
 /// treatment as ChattingAddressQRView (literal colors, not adaptive semantic colors, so text
 /// stays readable regardless of system dark/light mode without affecting the nav bar).
 /// Which spending address a send comes from, picked from a Send screen's Available pill (the
-/// spending-address Send, and the 1:1 chat's Send KAS sheet):
+/// spending-address Send):
 /// every spending address you can see (plus hidden ones that hold Kaspa), funded ones first, each
 /// with its balance. Picking one changes this send only - the primary stays where it is.
 struct SpendingSourcePicker: View {
@@ -1952,7 +1951,7 @@ struct SpendingAddressTransactionHistoryView: View {
     /// Name of the portfolio just added to, for the confirmation capsule.
     @State private var addedPortfolioName: String?
 
-    @EnvironmentObject var chatService: ChatService
+    @EnvironmentObject var walletService: WalletService
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
     private enum Tab: String, CaseIterable {
@@ -2000,7 +1999,7 @@ struct SpendingAddressTransactionHistoryView: View {
             }
             .padding(.top, 12)
 
-            // The app's tab look (Chats / Group Chats / Public Chats), not a segmented control.
+            // The app's tab look (`UnderlineTabBar`), not a segmented control.
             UnderlineTabBar(
                 tabs: Tab.allCases.map { (tab: $0, title: tabLabel($0)) },
                 selection: $selectedTab
@@ -2091,7 +2090,6 @@ struct SpendingAddressTransactionHistoryView: View {
                         await loadUtxos()
                     }
                 }
-                .environmentObject(ContactsManager.shared)
             }
         }
         .sheet(isPresented: $showCompoundSheet) {
@@ -2371,7 +2369,7 @@ struct SpendingAddressTransactionHistoryView: View {
         isLoading = true
         // Confirmed live against api.kaspa.org that limit=500 works fine in a single call
         // (~0.7s) - cuts this from up to 4 sequential round trips down to 1.
-        let result = await chatService.fetchFullTransactionsResult(for: entry.address, pageSize: 200, maxTransactions: 200)
+        let result = await walletService.fetchFullTransactionsResult(for: entry.address, pageSize: 200, maxTransactions: 200)
         // block rewards the chain never accepted paid nothing: not history
         transactions = result.transactions.filter(\.belongsInHistory)
         historyIncomplete = !result.complete
@@ -2413,7 +2411,7 @@ private struct SpendingAddressVisibilityView: View {
                 Button("Hide All", role: .destructive) { hideAll() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total.")
+                Text("Manage Addresses starts over with only your main address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total.")
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2428,7 +2426,7 @@ private struct SpendingAddressVisibilityView: View {
         }
     }
 
-    /// A Kaspa Hub style square: the chain, and how many of its addresses Manage Addresses shows.
+    /// A square tile: the chain, and how many of its addresses Manage Addresses shows.
     private func chainCard(quantum: Bool) -> some View {
         let chain = entries.filter { $0.isQuantum == quantum }
         let shown = chain.filter { !$0.hidden }.count
@@ -2490,23 +2488,15 @@ private struct SpendingAddressVisibilityView: View {
 /// the address has ever been used on-chain (balance counts as used; swept-to-zero addresses are
 /// checked against history lazily). The primary address and any address holding a balance can't
 /// be hidden - the same rules WalletManager.setSpendingAddressHidden enforces server-side.
-/// Addresses actively offered to contacts as payment-pool reservations don't appear here at
-/// all: the checklist mirrors the main Addresses list, and those rows live on the Chat
-/// Privacy tab (they can't be hidden or unhidden while the offer is live anyway).
 private struct AddressVisibilityChainList: View {
     @EnvironmentObject var walletManager: WalletManager
-    @EnvironmentObject var chatService: ChatService
+    @EnvironmentObject var walletService: WalletService
 
     /// Which chain this list pages: the quantum chain lives at `quantumIndexBase` and up, so
     /// one pager over raw indices never reached it (its first page was #20,000).
     let quantum: Bool
     @Binding var entries: [SpendingAddressEntry]
     let isLoading: Bool
-    /// Addresses currently offered to contacts as Chats Payment Privacy pool reservations.
-    /// They DO appear in this checklist - always checked, with the checkbox inert and the row
-    /// labeled "Chat privacy address" - so the user sees the full picture, but they can't be
-    /// unchecked while the offer is live. They still stay out of the MAIN Addresses list (the
-    /// Chat Privacy tab owns them); this is checklist-only visibility.
     /// Lazily-filled history results for zero-balance addresses (address -> ever used).
     @State private var usedByAddress: [String: Bool] = [:]
     /// Pager: 50 addresses per page, endless - pages past the revealed set derive future
@@ -2669,7 +2659,7 @@ private struct AddressVisibilityChainList: View {
     /// possibly-wrong "Unused") and the next appearance of the row retries.
     private func ensureUsedLoaded(_ entry: SpendingAddressEntry, funded: Bool) async {
         guard !funded, usedByAddress[entry.address] == nil else { return }
-        if let used = await chatService.spendingAddressUsedState(entry.address) {
+        if let used = await walletService.spendingAddressUsedState(entry.address) {
             usedByAddress[entry.address] = used
         }
     }

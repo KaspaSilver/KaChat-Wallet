@@ -9,20 +9,15 @@ import UniformTypeIdentifiers
 
 struct ProfileView: View {
     @EnvironmentObject var walletManager: WalletManager
-    // Deliberately NOT observing ChatService here: this screen only *calls* it in an action (via
-    // ChatService.shared), it never reads its @Published state in the body. Observing it made the
-    // whole Profile scroll recompute on ChatService's high-frequency sync churn (per-message
-    // `conversations` mutations, per-RPC node-latency updates) for the first ~15s after login,
-    // which was the scroll jank. The connection dot is its own small view with its own observation.
-    // Same reasoning for ContactsManager: it is only called into here, via
-    // ContactsManager.shared, so observing it made every contact mutation (KNS sweeps, system
-    // contact imports, alias edits) rebuild this whole scroll for nothing.
+    // Deliberately NOT observing WalletService here: this screen only *calls* it in an action (via
+    // WalletService.shared), it never reads its @Published state in the body. Observing it made the
+    // whole scroll recompute on every node-latency update. The connection dot is its own small view
+    // with its own observation.
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
     @State private var editedAlias = ""
     /// When `onAppear` last ran its balance / receive-address requests (at most every 30 s).
     @State private var appearRefreshedAt: Date?
-    @State private var aliasSaveTask: Task<Void, Never>?
     @State private var qrImage: UIImage?
     @State private var toastMessage: String?
     @State private var toastToken = UUID()
@@ -85,7 +80,6 @@ struct ProfileView: View {
         KaspaAddress.onActiveNetwork(donationAddressMainnet) ?? donationAddressMainnet
     }
     @State private var showOpenSourceLicenses = false
-    @State private var showWelcomeGuideReplay = false
     @State private var isEditingAccountName = false
     /// .kachat names of this wallet in their grace period: the banner at the top
     @StateObject private var expiredKachatNames = KachatExpiredNamesModel()
@@ -169,7 +163,7 @@ struct ProfileView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
                 .padding(.bottom, 8)
-                // Solid screen background, matching the Chats title band: all black in dark
+                // Solid screen background: all black in dark
                 // mode, no gray material blur.
                 .background(Color(UIColor.systemBackground))
             }
@@ -188,8 +182,8 @@ struct ProfileView: View {
                     balanceToolbarView
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    // Global notification center: KaPosts activity, group @mentions, live
-                    // public chats. A plain red DOT (no count) signals unread.
+                    // The notification bell: Kaspa received and .kachat name news. A plain red
+                    // DOT (no count) signals unread.
                     Button {
                         showNotifCenter = true
                     } label: {
@@ -288,11 +282,6 @@ struct ProfileView: View {
             .sheet(isPresented: $showAddressBook) {
                 AddressBookView(showsDoneButton: true)
             }
-            // Posted by the KaPosts profile's Edit KNS Profile button, which routes here rather
-            // than rebuilding an editor this screen's state already drives.
-            .onReceive(NotificationCenter.default.publisher(for: .openKNSProfileEditor)) { _ in
-                showKNSEditor = true
-            }
             // "Edit KaChat Profile": the address profile editor, on both networks (see
             // `KaChatProfileEditorSheet`).
             .sheet(isPresented: $showKNSEditor) {
@@ -339,7 +328,7 @@ struct ProfileView: View {
                 }
             }
             // Donate goes straight to Send with KaChat's pinned donation address filled in - an
-            // address, not a name anyone could register (IOS-067) - no chat opened
+            // address, not a name anyone could register (IOS-067)
             .sheet(isPresented: $showDonateSheet) {
                 if let wallet = walletManager.currentWallet {
                     WithdrawKaspaView(fromAddress: wallet.publicAddress, availableBalanceSompi: wallet.balanceSompi,
@@ -355,9 +344,6 @@ struct ProfileView: View {
             }
             .fullScreenCover(isPresented: $showKachatSetupGuide) {
                 KachatSetupGuideView { showKachatSetupGuide = false }
-            }
-            .fullScreenCover(isPresented: $showWelcomeGuideReplay) {
-                WelcomeGuideView(onFinished: { showWelcomeGuideReplay = false })
             }
             .fullScreenCover(isPresented: $showCreateKNSProfileFlow) {
                 if let wallet = walletManager.currentWallet {
@@ -458,7 +444,7 @@ struct ProfileView: View {
     private var balanceToolbarView: some View {
         let sompi = walletManager.currentWallet?.balanceSompi
         let exact = sompi.map(formatKaspaExact) ?? "--"
-        // Kaspa logo + bold, matching the KaPosts/Chats balance style.
+        // Kaspa logo + bold, matching the balance style on every other tab.
         return HStack(spacing: 6) {
             Image("KaspaLogo")
                 .resizable()
@@ -652,7 +638,7 @@ struct ProfileView: View {
         showToast("Account renamed.")
     }
 
-    /// KaPosts-style hero: KNS banner (gradient fallback), overlapping avatar, display name and
+    /// The hero: KNS banner (gradient fallback), overlapping avatar, display name and
     /// bio. The name is what other people see you as: your domain name, else your short address
     /// ("kaspa:xxxx....xxxx") - never the account name, which is only your own label for it.
     /// Testnet only: the `.kachat` label of the wallet's address (nil on mainnet, or without one).
@@ -687,9 +673,9 @@ struct ProfileView: View {
             if KNSService.showsDomainNamesAsIdentity,
                let domain = knsPrimaryDomain ?? knsProfileInfo?.domainName,
                !domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return KaPostsView.displayKasName(domain)
+                return domain.trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            return Contact.generateDefaultAlias(from: wallet.publicAddress)
+            return KaspaAddress.shortAlias(wallet.publicAddress)
         }()
         // On testnet the .kachat profile (avatar, banner and bio looked up from its social link)
         // comes first; the KNS one otherwise.
@@ -775,16 +761,6 @@ struct ProfileView: View {
         }
         .background(glassBackground(cornerRadius: 18))
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    /// Single source of truth for "does this wallet have a KNS profile at all?" - a registered
-    /// domain is what the editor needs (see `showKNSEditor`'s `assetId != nil` guard), so the same
-    /// predicate decides both the destination (editor vs. guided creation flow) and the wording of
-    /// every affordance that offers it. Reads `knsProfileInfo` (@State, refreshed by
-    /// `refreshKNSData`) so the label flips from "Create" to "Edit" as soon as a profile is
-    /// created - no app restart required.
-    private var hasKNSProfile: Bool {
-        !(knsProfileInfo?.domainName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func setPrimaryDomain(_ domain: KNSDomain) async {
@@ -907,119 +883,12 @@ struct ProfileView: View {
         }
     }
 
-    @ViewBuilder
-    private var knsProfileSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("KNS Profile")
-            if isLoadingKNS && knsProfileInfo == nil {
-                HStack {
-                    ProgressView().scaleEffect(0.8)
-                    Text("Loading profile...")
-                        .foregroundColor(.secondary)
-                }
-            } else if let profileInfo = knsProfileInfo {
-                knsProfileCard(profileInfo)
-            }
-        }
-    }
-
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.footnote)
             .fontWeight(.medium)
             .foregroundColor(.secondary)
             .padding(.horizontal, 4)
-    }
-
-    private func knsProfileCard(_ profileInfo: KNSAddressProfileInfo) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if KNSProfileLinkBuilder.websiteURL(from: profileInfo.profile?.bannerUrl) != nil {
-                KNSBannerImageView(
-                    bannerURLString: profileInfo.profile?.bannerUrl,
-                    height: 140,
-                    cornerRadius: 0,
-                    fitsWidth: true
-                )
-            }
-
-            knsProfileHeaderRow(profileInfo)
-
-            if isSavingKNSProfile, let progress = knsSaveProgressText {
-                HStack(spacing: 10) {
-                    ProgressView().scaleEffect(0.8)
-                    Text(progress)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-            }
-
-            if let assetId = profileInfo.assetId,
-               !assetId.isEmpty,
-               !failedKNSUpdates.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Failed updates")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    ForEach(failedKNSUpdates.keys.sorted(by: { $0.displayName < $1.displayName }), id: \.self) { key in
-                        let value = failedKNSUpdates[key] ?? ""
-                        Button {
-                            Task {
-                                await retryFailedKNSField(
-                                    key: key,
-                                    value: value,
-                                    assetId: assetId,
-                                    domainName: profileInfo.domainName
-                                )
-                            }
-                        } label: {
-                            HStack {
-                                Text(localizedFormat("Retry %@", key.displayName))
-                                Spacer()
-                                Image(systemName: "arrow.clockwise")
-                                    .foregroundColor(.accentColor)
-                            }
-                        }
-                        .disabled(isSavingKNSProfile)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-            }
-
-            if hasMoreProfileInfo(profileInfo) {
-                Divider()
-                    .padding(.leading, 16)
-
-                DisclosureGroup(isExpanded: $showMoreProfileInfo) {
-                    moreInfoRows(profileInfo)
-                        .padding(.top, 8)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 14)
-                } label: {
-                    Text("More Info")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.accentColor)
-                }
-                .tint(.accentColor)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
-                )
-        )
-        // Clip after background (not before) so the banner's square image corners are
-        // trimmed to match the card's rounded top corners, then apply the shadow last so
-        // it isn't clipped away along with the banner overflow.
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
     }
 
     private func knsProfileHeaderRow(_ profileInfo: KNSAddressProfileInfo) -> some View {
@@ -1125,7 +994,7 @@ struct ProfileView: View {
         }
     }
 
-    // MARK: - QR buttons row (Accept Kaspa / Chatting Address)
+    // MARK: - QR buttons row (Accept Kaspa / Main Address)
 
     private func qrButtonsSection(_ wallet: Wallet) -> some View {
         HStack(spacing: 24) {
@@ -1133,7 +1002,7 @@ struct ProfileView: View {
             NavigationLink {
                 // A never-used address, resolved on the way in - see freshReceiveAddress. Never
                 // substitutes the CHATTING address for the spending role, which was the
-                // "chatting balance under spending" flicker; if nothing can be derived this
+                // "main balance under spending" flicker; if nothing can be derived this
                 // instant (locked keychain) it says so rather than showing the wrong address.
                 ReceiveKaspaQRView()
             } label: {
@@ -1151,7 +1020,7 @@ struct ProfileView: View {
             } label: {
                 VStack(spacing: 8) {
                     qrCircleIcon
-                    Text("Chatting Address")
+                    Text("Main Address")
                         .font(.subheadline)
                         .foregroundColor(.primary)
                 }
@@ -1167,7 +1036,6 @@ struct ProfileView: View {
     /// A view of its own rather than resolving in the NavigationLink's destination builder: that
     /// builder is evaluated eagerly while the row is merely on screen, so any work in it would
     /// run whether or not the user ever taps, and it cannot await.
-    /// Also opened from the Chats New sheet ("Receive Kaspa").
     struct ReceiveKaspaQRView: View {
         @EnvironmentObject private var walletManager: WalletManager
         @State private var address: String?
@@ -1180,7 +1048,7 @@ struct ProfileView: View {
                     ChattingAddressQRView(
                         address: address,
                         balanceSompi: balanceSompi,
-                        subtitle: "A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. This address should be used for everything not related to chatting or domains."
+                        subtitle: "A fresh address, never used before. Kaspa sent here lands in this account and shows in your spending total. Use it for everything except .kachat names."
                     )
                 } else if resolving {
                     ProgressView("Preparing a fresh address")
@@ -1230,11 +1098,11 @@ struct ProfileView: View {
     // MARK: - Manage Addresses card
 
     /// One card for every address of this account - it opens Manage Addresses, which lists them
-    /// all, the chatting address first. Which address a send comes from is picked on the send
-    /// screen (From), so Profile no longer splits Chatting from Spending or has a "primary".
+    /// all, the main address first. Which address a send comes from is picked on the send
+    /// screen (From), so this tab doesn't split Main from Spending or have a "primary".
     private func addressDropdownsSection(_ wallet: Wallet) -> some View {
         VStack(spacing: 20) {
-            // Testnet only: free TN10 coins for the chatting address, from the official faucet.
+            // Testnet only: free TN10 coins for the main address, from the official faucet.
             if AppSettings.load().networkType == .testnet {
                 TestnetFaucetClaimButton(address: wallet.publicAddress)
             }
@@ -1275,29 +1143,10 @@ struct ProfileView: View {
         }
     }
 
-    /// Everything this account holds: the chatting address and every spending address.
+    /// Everything this account holds: the main address and every spending address.
     private func accountTotalSompi(_ wallet: Wallet) -> UInt64? {
         guard let spending = spendingTotalSompi else { return nil }
         return (wallet.balanceSompi ?? 0) + spending
-    }
-
-    private func addressRowIconButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            addressRowIconLabel(icon: icon, label: label)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// A large icon-only circle, no caption - the caption text became the accessibility label.
-    private func addressRowIconLabel(icon: String, label: String) -> some View {
-        Image(systemName: icon)
-            .font(.scaled(size: 22, weight: .medium))
-            .foregroundColor(.accentColor)
-            .frame(width: 54, height: 54)
-            .background(Circle().fill(.regularMaterial))
-            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
-            .contentShape(Circle())
-            .accessibilityLabel(Text(label))
     }
 
     /// Coalesces balance refreshes triggered by own-address activity.
@@ -1463,10 +1312,9 @@ struct ProfileView: View {
         }
     }
 
-    /// Next to the Profile title: a kachat.app link to you. Anywhere it is pasted it previews
-    /// with your KNS name and avatar; tapped with KaChat installed it opens a chat with you
-    /// (or the new-chat screen, for someone who has not got you as a contact); without it,
-    /// the page offers the download.
+    /// Next to the Wallet title: a kachat.app link to you. Anywhere it is pasted it previews
+    /// with your KNS name and avatar; tapped with KaChat installed it opens your profile there;
+    /// without it, the page offers the download.
     @ViewBuilder
     private var profileShareButton: some View {
         if let address = walletManager.currentWallet?.publicAddress,
@@ -1494,22 +1342,6 @@ struct ProfileView: View {
 
     private var supportEmailURL: URL {
         URL(string: "mailto:kaspasilver@gmail.com")!
-    }
-
-    private func scheduleAliasSave(_ rawAlias: String, previousAlias: String) {
-        aliasSaveTask?.cancel()
-        let trimmed = rawAlias.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != previousAlias else { return }
-
-        aliasSaveTask = Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            guard walletManager.currentWallet?.alias != trimmed else { return }
-            try? await walletManager.updateAlias(trimmed)
-            await MainActor.run {
-                showToast("Name updated.")
-            }
-        }
     }
 
     private func showToast(_ message: String, style: ToastStyle = .success) {
@@ -2520,7 +2352,7 @@ private struct KNSProfileEditorSheet: View {
                             Text("Confirm Changes")
                                 .font(.headline)
                                 .fontWeight(.bold)
-                            Text("\(pendingChanges.count) change\(pendingChanges.count == 1 ? "" : "s"). Each is submitted as its own on-chain transaction from your chatting address:")
+                            Text("\(pendingChanges.count) change\(pendingChanges.count == 1 ? "" : "s"). Each is submitted as its own on-chain transaction from your main address:")
                                 .font(.subheadline)
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(pendingChanges, id: \.self) { change in
@@ -2725,7 +2557,7 @@ private struct KNSDomainsListView: View {
 
     var body: some View {
         // One square card per name ending, KaChat's own first: .kachat, KNS (.kas), dotk (.k),
-        // Kaspa Names (.kaspa) - the same tile look as Kaspa Hub. Each card pushes that
+        // Kaspa Names (.kaspa) - one square tile each. Each card pushes that
         // service's own screen (these used to be tabs on this screen).
         ScrollView {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
@@ -2767,7 +2599,7 @@ private struct KNSDomainsListView: View {
     }
 
     /// The same read KachatLiveDomainsTab's load() does, reduced to a count: the whole wallet's
-    /// held names for the own chatting address, the one address's otherwise.
+    /// held names for the own main address, the one address's otherwise.
     private func refreshKachatCount() async {
         guard KachatNamesService.isEnabled, KachatNamesService.isLaunched else {
             kachatCount = 0
@@ -2810,8 +2642,7 @@ private struct KNSDomainsListView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// A Kaspa Hub style square: the name ending big in the brand style, who runs it under it.
-    /// Same material, radius and hairline as the hub tiles.
+    /// A square tile: the name ending big in the brand style, who runs it under it.
     private func serviceCard(_ tld: NameServiceTLD) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
@@ -2964,7 +2795,7 @@ private struct KNSDomainsListView: View {
                     .foregroundColor(.accentColor)
                 Text(".kachat names are coming")
                     .font(.headline)
-                Text("KaChat's own names will live here: claim one, set it as your name in chats, and share it as your profile link.")
+                Text("KaChat's own names will live here: claim one, make it your name, and share it as your profile link.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -3050,259 +2881,11 @@ struct DomainNameCardView: View {
     }
 }
 
-private struct KNSDomainInscribeSheet: View {
-    let walletAddress: String
-    let onComplete: (KNSDomainInscribeResult) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var domainInput = ""
-    @State private var feeTiers: [Int: Decimal] = [:]
-    @State private var availability: KNSDomainAvailability?
-    @State private var isCheckingAvailability = false
-    @State private var isSubmitting = false
-    @State private var feeError: String?
-    @State private var checkError: String?
-    @State private var submitError: String?
-    @State private var checkTask: Task<Void, Never>?
-
-    private var normalizedLabel: String? {
-        KNSService.shared.normalizeDomainLabel(domainInput)
-    }
-
-    private var fullDomain: String? {
-        guard let normalizedLabel else { return nil }
-        return "\(normalizedLabel).kas"
-    }
-
-    private var currentServiceFeeKas: Decimal? {
-        guard let label = normalizedLabel else { return nil }
-        guard !feeTiers.isEmpty else { return nil }
-        if availability?.isReservedDomain == true {
-            return 0
-        }
-        let tier = min(max(label.count, 1), 5)
-        return feeTiers[tier] ?? feeTiers[5]
-    }
-
-    private var canSubmit: Bool {
-        guard !isSubmitting, !isCheckingAvailability else { return false }
-        guard normalizedLabel != nil else { return false }
-        guard availability?.available == true else { return false }
-        return currentServiceFeeKas != nil
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Domain") {
-                    TextField("name", text: $domainInput)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if let fullDomain {
-                        Text(fullDomain)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("Use lowercase letters, numbers, and hyphen.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    if isCheckingAvailability {
-                        HStack(spacing: 8) {
-                            ProgressView().scaleEffect(0.8)
-                            Text("Checking availability...")
-                                .foregroundColor(.secondary)
-                        }
-                    } else if let checkError, !checkError.isEmpty {
-                        Text(checkError)
-                            .font(.footnote)
-                            .foregroundColor(.red)
-                    } else if let availability {
-                        Text(
-                            availability.available
-                            ? localizedFormat("%@ can be inscribed.", availability.domain)
-                            : String(localized: "This domain is not available.")
-                        )
-                        .font(.footnote)
-                        .foregroundColor(availability.available ? .green : .red)
-                    }
-                }
-
-                Section("Fee") {
-                    if let fee = currentServiceFeeKas {
-                        HStack {
-                            Text("Service fee")
-                            Spacer()
-                            Text(verbatim: "\(formatKas(fee)) \(KaspaUnit.symbol)")
-                                .foregroundColor(.secondary)
-                        }
-                        if availability?.isReservedDomain == true {
-                            Text("Reserved domain: no revenue payment is required.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        Text("Fee unavailable")
-                            .foregroundColor(.secondary)
-                    }
-
-                    if let feeError, !feeError.isEmpty {
-                        Text(feeError)
-                            .font(.footnote)
-                            .foregroundColor(.red)
-                    }
-                }
-
-                if isSubmitting {
-                    Section {
-                        HStack(spacing: 8) {
-                            ProgressView().scaleEffect(0.8)
-                            Text("Submitting inscription...")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-
-                if let submitError, !submitError.isEmpty {
-                    Section {
-                        Text(submitError)
-                            .font(.footnote)
-                            .foregroundColor(.red)
-                    }
-                }
-            }
-            .navigationTitle("Inscribe Domain")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Inscribe") {
-                        submitInscribe()
-                    }
-                    .disabled(!canSubmit)
-                }
-            }
-            .task {
-                await loadFeeTiers()
-            }
-            .onChange(of: domainInput) { _ in
-                scheduleAvailabilityCheck()
-            }
-            .onDisappear {
-                checkTask?.cancel()
-            }
-        }
-    }
-
-    private func loadFeeTiers() async {
-        do {
-            let tiers = try await KNSService.shared.fetchInscribeFeeTiers()
-            await MainActor.run {
-                feeTiers = tiers
-                feeError = nil
-            }
-        } catch {
-            await MainActor.run {
-                feeError = UserFacingError.message(for: error)
-            }
-        }
-    }
-
-    private func scheduleAvailabilityCheck() {
-        checkTask?.cancel()
-        submitError = nil
-        availability = nil
-
-        let raw = domainInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else {
-            checkError = nil
-            isCheckingAvailability = false
-            return
-        }
-        guard let label = normalizedLabel else {
-            checkError = String(localized: "Use lowercase letters, numbers, and hyphen.")
-            isCheckingAvailability = false
-            return
-        }
-
-        checkError = nil
-        isCheckingAvailability = true
-        let full = "\(label).kas"
-        checkTask = Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            do {
-                let result = try await KNSService.shared.checkDomainAvailability(
-                    address: walletAddress,
-                    domainName: full
-                )
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    availability = result
-                    isCheckingAvailability = false
-                    checkError = nil
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    availability = nil
-                    isCheckingAvailability = false
-                    checkError = UserFacingError.message(for: error)
-                }
-            }
-        }
-    }
-
-    private func submitInscribe() {
-        guard let label = normalizedLabel else {
-            submitError = String(localized: "Invalid domain label")
-            return
-        }
-        isSubmitting = true
-        submitError = nil
-        Task {
-            do {
-                let result = try await KNSDomainInscribeService.shared.inscribeDomain(label: label)
-                await MainActor.run {
-                    isSubmitting = false
-                    onComplete(result)
-                    dismiss()
-                }
-            } catch {
-                await MainActor.run {
-                    isSubmitting = false
-                    submitError = UserFacingError.message(for: error)
-                    Haptics.impact(.medium)
-                }
-            }
-        }
-    }
-
-    private func formatKas(_ value: Decimal) -> String {
-        let number = NSDecimalNumber(decimal: value)
-        let double = number.doubleValue
-        if abs(double.rounded() - double) < 0.0000001 {
-            return String(format: "%.0f", double)
-        }
-        return number.stringValue
-    }
-
-    private func localizedFormat(_ key: String, _ args: CVarArg...) -> String {
-        String(format: AppLocalization.string(key), locale: AppLocalization.locale, arguments: args)
-    }
-}
-
 /// Detail screen for a single owned domain - the card itself, primary/status info, and a
 /// dedicated Send entry point. Reached by tapping a card in KNSDomainsListView. No transfer
 /// history section: KNS only exposes a "currently owned assets" endpoint, and the app's own
-/// KNS-transfer tracking is a one-shot chat notification, not a persisted per-domain log, so
-/// there's no reliable data source for it yet.
+/// KNS-transfer tracking is not a persisted per-domain log, so there's no reliable data source
+/// for it yet.
 struct KNSDomainDetailView: View {
     let domain: KNSDomain
     let isPrimary: Bool
@@ -3468,7 +3051,7 @@ struct KNSDomainDetailView: View {
 /// whole inscription rather than a chosen KAS amount. Not `private`: ManageAddressesView's
 /// per-spending-address "KNS Domains" tab reuses this exact sheet, passing
 /// `spendingAddressIndex` so the transfer is owned/funded/signed by that spending address's
-/// derived key instead of the identity/chatting address.
+/// derived key instead of the identity/main address.
 struct KNSDomainSendView: View {
     let domain: KNSDomain
     /// When non-nil, the domain lives on this spending-chain address index and the transfer
@@ -3878,14 +3461,14 @@ struct KNSDomainSendView: View {
     }
 }
 
-/// Transaction history for the chatting (identity) address, reached from its dropdown in
+/// Transaction history for the main (identity) address, reached from its dropdown in
 /// Profile. Same pattern as ManageAddressesView's SpendingAddressTransactionHistoryView: tapping
 /// a transaction opens it directly on whichever block explorer is selected in Settings >
 /// Connection > Kaspa Explorer, rather than showing an in-app detail screen.
-/// Full-featured detail screen for the wallet's own chatting/identity address — field-for-field
+/// Full-featured detail screen for the wallet's own main (identity) address — field-for-field
 /// the same screen as ManageAddressesView's SpendingAddressTransactionHistoryView (balance,
 /// Transaction History/UTXOs tabs, Compound UTXOs, Export private key, Explorer, Receive/Send),
-/// just address-based instead of index-based. Reached from the Profile screen's Chatting Address
+/// just address-based instead of index-based. Reached from the Profile screen's Main Address
 /// section's "Manage Address" row.
 struct ChattingAddressManageView: View {
     let address: String
@@ -3898,7 +3481,7 @@ struct ChattingAddressManageView: View {
     /// Name of the portfolio just added to, for the confirmation capsule.
     @State private var addedPortfolioName: String?
 
-    @EnvironmentObject var chatService: ChatService
+    @EnvironmentObject var walletService: WalletService
     @EnvironmentObject var settingsViewModel: SettingsViewModel
 
     private enum Tab: String, CaseIterable {
@@ -3974,7 +3557,7 @@ struct ChattingAddressManageView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            // Right above what it switches, the way Chats has it.
+            // Right above what it switches.
             UnderlineTabBar(
                 tabs: Tab.allCases.map { (tab: $0, title: tabLabel($0)) },
                 selection: $selectedTab
@@ -3989,7 +3572,7 @@ struct ChattingAddressManageView: View {
                 AddressDomainsTab(address: address)
             }
         }
-        .navigationTitle("Chatting Address")
+        .navigationTitle("Main Address")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddressActions) {
             addressActionsSheet
@@ -4372,7 +3955,7 @@ struct ChattingAddressManageView: View {
         isLoading = true
         // Confirmed live against api.kaspa.org that limit=500 works fine in a single call
         // (~0.7s) - cuts this from up to 4 sequential round trips down to 1.
-        let result = await chatService.fetchFullTransactionsResult(for: address, pageSize: 200, maxTransactions: 200)
+        let result = await walletService.fetchFullTransactionsResult(for: address, pageSize: 200, maxTransactions: 200)
         // block rewards the chain never accepted paid nothing: not history
         transactions = result.transactions.filter(\.belongsInHistory)
         historyIncomplete = !result.complete
@@ -4385,7 +3968,7 @@ struct ChattingAddressManageView: View {
     }
 }
 
-/// Private-key reveal for the wallet's own chatting/identity address — mirrors
+/// Private-key reveal for the wallet's own main (identity) address — mirrors
 /// SpendingAddressPrivateKeyView, but reads the wallet's own root private key rather than a
 /// derived spending key, since the identity address isn't part of the spending-chain derivation.
 /// Gated by `biometricSeedPhraseEnabled` (not `biometricSpendingKeyEnabled`) since this is the
@@ -4465,7 +4048,7 @@ private struct ChattingAddressPrivateKeyView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("Chatting Address")
+            .navigationTitle("Main Address")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -4507,7 +4090,7 @@ private struct ChattingAddressPrivateKeyView: View {
     }
 }
 
-/// The chatting address's public key, from the Address Actions sheet.
+/// The main address's public key, from the Address Actions sheet.
 ///
 /// Nothing is derived or unlocked to show this: a Kaspa P2PK address IS its public key in bech32,
 /// so this decodes the address the screen already has. No reveal gate and no clipboard expiry
@@ -4520,7 +4103,7 @@ private struct ChattingAddressPublicKeyView: View {
     @State private var toastToken = UUID()
 
     /// nil only for an address shape that carries no key (script-hash), which the wallet's own
-    /// chatting address never is.
+    /// main address never is.
     private var publicKeyHex: String? {
         KaspaAddress.publicKey(from: address)?.hexString
     }
@@ -4532,7 +4115,7 @@ private struct ChattingAddressPublicKeyView: View {
                     Label("Safe to share", systemImage: "checkmark.seal.fill")
                         .font(.headline)
                         .foregroundColor(.accentColor)
-                    Text("This is the public half of your chatting address. It identifies you and cannot spend anything.")
+                    Text("This is the public half of your main address. It identifies you and cannot spend anything.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -4593,7 +4176,7 @@ private struct ChattingAddressPublicKeyView: View {
     }
 }
 
-/// Dedicated white-background QR display, matching Android's "Accept Kaspa"/"Chatting Address"
+/// Dedicated white-background QR display, matching Android's "Accept Kaspa"/"Main Address"
 /// QR screen — deliberately uses literal black/white colors rather than adaptive .primary/
 /// .secondary, since forcing a white content area regardless of system dark/light mode would
 /// otherwise leave semantic text colors resolved for dark mode (and invisible on the white
@@ -4601,7 +4184,7 @@ private struct ChattingAddressPublicKeyView: View {
 struct ChattingAddressQRView: View {
     let address: String
     let balanceSompi: UInt64?
-    var subtitle: String = "This address should be for chatting and domains only. 1 Kaspa is enough for about 500 interactions in the app. Domains cost from 35 to 4,000 Kaspa, depending on the name."
+    var subtitle: String = "Your main address holds your .kachat names and profile. Domains cost from 35 to 4,000 Kaspa, depending on the name."
 
     @State private var qrImage: UIImage?
     @State private var toastMessage: String?
@@ -4649,8 +4232,8 @@ struct ChattingAddressQRView: View {
                         .font(.subheadline)
                         .foregroundColor(Color.black.opacity(0.6))
                         .multilineTextAlignment(.center)
-                        // Its full height always: in a sheet that is still growing (the Chats
-                        // New sheet) it otherwise truncated, then re-wrapped and jumped.
+                        // Its full height always: in a sheet that is still growing it otherwise
+                        // truncated, then re-wrapped and jumped.
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 40)
 
@@ -4731,8 +4314,8 @@ enum WithdrawFeeTier: String, CaseIterable, Identifiable, Hashable {
 
 /// Custom success card replacing a plain alert so the transaction id can be a real tappable
 /// link (native SwiftUI alerts can't embed interactive text in their message) - shared by every
-/// "you just sent Kaspa" flow (chatting-address withdraw, Manage Addresses' per-address send).
-/// Sends a plain KAS transfer from the wallet's chatting (identity) address to an arbitrary
+/// "you just sent Kaspa" flow (main-address withdraw, Manage Addresses' per-address send).
+/// Sends a plain KAS transfer from the wallet's main (identity) address to an arbitrary
 /// recipient address. Reuses AddContactView's address-entry conventions (paste/QR scan,
 /// live validation) but with an amount field instead of a contact-name field, since this
 /// isn't creating a contact.
@@ -4756,13 +4339,12 @@ struct WithdrawKaspaView: View {
 
     /// The request this send pays, if any (`paymentRequest`, or one pasted in).
     @State private var activeRequest: PaymentRequest?
-    /// Where the Kaspa leaves from (the From section): the chatting address by default.
+    /// Where the Kaspa leaves from (the From section): the main address by default.
     @State private var source: SendSource = .chatting
     /// The From address's balance, loaded by `SendFromSection`.
     @State private var sourceBalanceSompi: UInt64?
 
-    @EnvironmentObject var chatService: ChatService
-    @EnvironmentObject var contactsManager: ContactsManager
+    @EnvironmentObject var walletService: WalletService
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var portfolioViewModel = PortfolioViewModel.shared
@@ -4960,9 +4542,9 @@ struct WithdrawKaspaView: View {
                 do {
                     let fee: UInt64
                     if let index = source.spendingIndex {
-                        fee = try await chatService.estimateSpendingAddressWithdrawalFee(index: index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
+                        fee = try await walletService.estimateSpendingAddressWithdrawalFee(index: index, toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
                     } else {
-                        fee = try await chatService.estimateWithdrawalFee(toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
+                        fee = try await walletService.estimateWithdrawalFee(toAddress: effectiveAddress, amountSompi: amountSompi, manualUtxos: manualUtxos)
                     }
                     guard !Task.isCancelled else { return }
                     normalFeeSompi = fee
@@ -5097,9 +4679,9 @@ struct WithdrawKaspaView: View {
             do {
                 let maxSompi: UInt64
                 if let index = spendingIndex {
-                    maxSompi = try await chatService.estimateMaxSpendingAddressAmount(index: index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    maxSompi = try await walletService.estimateMaxSpendingAddressAmount(index: index, toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 } else {
-                    maxSompi = try await chatService.estimateMaxWithdrawalAmount(toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    maxSompi = try await walletService.estimateMaxWithdrawalAmount(toAddress: recipient, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 }
                 await MainActor.run {
                     amountInput = fiatAmountState.setMaxKas(Double(maxSompi) / 100_000_000.0, priceInCurrency: portfolioViewModel.currentPriceUsd)
@@ -5136,24 +4718,14 @@ struct WithdrawKaspaView: View {
         errorMessage = nil
         let recipient = effectiveAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let tipSompi = extraFeeSompi
-        let request = activeRequest
         let spendingIndex = source.spendingIndex
         Task {
             do {
                 let txId: String
-                if let request, request.toChattingAddress, request.address.lowercased() == recipient.lowercased(),
-                   let contact = (try? contactsManager.addContact(address: recipient, alias: "", isAutoAdded: true))
-                    ?? contactsManager.getContact(byAddress: recipient) {
-                    // A chatting address: a chat payment, the memo encrypted to them inside it -
-                    // it lands in your chat with them like any payment from the chat.
-                    txId = try await chatService.sendPayment(
-                        to: contact, amountSompi: amountSompi, note: request.memo,
-                        extraFeeSompi: tipSompi, sourceSpendingIndex: spendingIndex, manualUtxos: manualUtxos
-                    ) ?? ""
-                } else if let spendingIndex {
-                    txId = try await chatService.sendFromSpendingAddress(index: spendingIndex, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                if let spendingIndex {
+                    txId = try await walletService.sendFromSpendingAddress(index: spendingIndex, toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 } else {
-                    txId = try await chatService.sendWithdrawal(toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
+                    txId = try await walletService.sendWithdrawal(toAddress: recipient, amountSompi: amountSompi, manualUtxos: manualUtxos, extraFeeSompi: tipSompi)
                 }
                 await MainActor.run {
                     isSending = false
@@ -5239,15 +4811,13 @@ private enum ProfileQRCodeCache {
 #Preview {
     ProfileView()
         .environmentObject(WalletManager.shared)
-        .environmentObject(ContactsManager.shared)
-        .environmentObject(ChatService.shared)
+        .environmentObject(WalletService.shared)
 }
 
 
 // MARK: - Profile Help screen
 
-/// The app's guides, reached from Profile > Help. KaChat Wallet keeps only the .kachat names
-/// guide; KaChat's Welcome Guide walks through chats, which the wallet doesn't have.
+/// The app's guides, reached from Wallet > Help: the .kachat names guide.
 struct ProfileHelpView: View {
     let onKNSSetupGuide: () -> Void
 
@@ -5303,9 +4873,9 @@ struct ProfileHelpView: View {
 
 // MARK: - Claim Testnet Kaspa (Profile, testnet only)
 
-/// "Claim Testnet Kaspa", above the Chatting card on testnet. The official TN10 faucet sits
+/// "Claim Testnet Kaspa", above the addresses card on testnet. The official TN10 faucet sits
 /// behind a Cloudflare check, so it can't be claimed from in the background: the button copies
-/// the chatting address (`kaspatest:` form) and opens the faucet in the in-app browser, with a
+/// the main address (`kaspatest:` form) and opens the faucet in the in-app browser, with a
 /// strip saying it's copied, where you paste it, pass the
 /// check and claim the most it offers. The faucet allows one claim a day, so once the address's
 /// balance goes up after a visit the button locks for 24 hours (kept per address).
@@ -5323,7 +4893,7 @@ struct TestnetFaucetClaimButton: View {
 
     private var defaultsKey: String { "kachat_tn10_faucet_claimed_\(address.lowercased())" }
 
-    /// The chatting address in its TN10 (`kaspatest:`) form - what the faucet's address field
+    /// The main address in its TN10 (`kaspatest:`) form - what the faucet's address field
     /// takes. The wallet already shows it that way on testnet; this makes sure of it.
     private var tn10Address: String {
         guard let a = KaspaAddress(address: address.lowercased()), a.hrp != "kaspatest" else { return address }
@@ -5369,7 +4939,7 @@ struct TestnetFaucetClaimButton: View {
                             } else if let until {
                                 Text(verbatim: String(format: AppLocalization.string("Claimed. You can claim again in %@."), remaining(until: until, now: context.date)))
                             } else {
-                                Text("Copies your chatting address and opens the TN10 faucet: paste it, pass the check and claim the most it offers.")
+                                Text("Copies your main address and opens the TN10 faucet: paste it, pass the check and claim the most it offers.")
                             }
                         }
                         .font(.caption)
@@ -5397,12 +4967,12 @@ struct TestnetFaucetClaimButton: View {
         .fullScreenCover(isPresented: $showFaucet, onDismiss: { Task { await checkForClaim() } }) {
             InAppBrowserScreen(
                 url: Self.faucetURL,
-                notice: AppLocalization.string("Your TN10 chatting address is copied. Paste it into the faucet's address field.")
+                notice: AppLocalization.string("Your TN10 main address is copied. Paste it into the faucet's address field.")
             ) { showFaucet = false }
         }
     }
 
-    /// After the faucet closes: the payment usually lands within seconds, so watch the chatting
+    /// After the faucet closes: the payment usually lands within seconds, so watch the main
     /// balance for up to a minute. A rise means the claim went through - lock for 24 hours.
     /// No rise (no claim, or the faucet refused) leaves the button free to try again.
     private func checkForClaim() async {
@@ -5422,100 +4992,11 @@ struct TestnetFaucetClaimButton: View {
     }
 }
 
-// MARK: - Profile Apps screen (Kaspa ecosystem quick links)
-
-/// Bubble-style launchers for Kaspa ecosystem sites, each opening in an IN-APP browser
-/// (SFSafariViewController) rather than kicking the user out to Safari.
-struct ProfileAppsView: View {
-    struct EcosystemApp: Identifiable {
-        let name: String
-        let icon: String
-        let usesKaspaLogo: Bool
-        let url: URL
-        var id: String { name }
-    }
-
-    private let apps: [EcosystemApp] = [
-        EcosystemApp(name: "Kaspa.org", icon: "", usesKaspaLogo: true, url: URL(string: "https://kaspa.org")!),
-        EcosystemApp(name: "Kaspa Stream", icon: "waveform.path.ecg", usesKaspaLogo: false, url: URL(string: "https://kaspa.stream")!),
-        EcosystemApp(name: "Kaspa Explorer", icon: "magnifyingglass", usesKaspaLogo: false, url: URL(string: "https://explorer.kaspa.org")!),
-        EcosystemApp(name: "KasMap", icon: "map", usesKaspaLogo: false, url: URL(string: "https://kasmap.org")!),
-        EcosystemApp(name: "KasShi", icon: "play.rectangle.fill", usesKaspaLogo: false, url: URL(string: "https://kasshi.io")!),
-        EcosystemApp(name: "Kaspa News", icon: "newspaper", usesKaspaLogo: false, url: URL(string: "https://kaspa.news")!),
-        EcosystemApp(name: "KasPlay", icon: "gamecontroller", usesKaspaLogo: false, url: URL(string: "https://kasplay.fun")!),
-        EcosystemApp(name: "KasMart", icon: "cart", usesKaspaLogo: false, url: URL(string: "https://kasmart.org")!),
-        EcosystemApp(name: "KasMedia", icon: "doc.text.image", usesKaspaLogo: false, url: URL(string: "https://kasmedia.com")!),
-        EcosystemApp(name: "Kaspalytics", icon: "chart.bar", usesKaspaLogo: false, url: URL(string: "https://www.kaspalytics.com")!),
-        EcosystemApp(name: "Kas-Smiths", icon: "hammer", usesKaspaLogo: false, url: URL(string: "https://kas-smiths.org")!),
-        EcosystemApp(name: "Kaspa Core R&D", icon: "atom", usesKaspaLogo: false, url: URL(string: "https://t.me/kasparnd")!),
-        // Free testnet-10 KAS for the app's testnet mode (Settings > Testnet uses TN10).
-        EcosystemApp(name: "TN10 Faucet", icon: "drop.fill", usesKaspaLogo: false, url: URL(string: "https://faucet-tn10.kaspanet.io")!)
-    ]
-
-    @State private var browserURL: URL?
-
-    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 20)]
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 24) {
-                ForEach(apps) { app in
-                    Button {
-                        Haptics.impact(.light)
-                        browserURL = app.url
-                    } label: {
-                        VStack(spacing: 8) {
-                            Group {
-                                if app.usesKaspaLogo {
-                                    Image("KaspaLogo")
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 34, height: 34)
-                                } else {
-                                    Image(systemName: app.icon)
-                                        .font(.scaled(size: 28, weight: .semibold))
-                                        .foregroundColor(.accentColor)
-                                }
-                            }
-                            .frame(width: 68, height: 68)
-                            .background(
-                                Circle()
-                                    .fill(.regularMaterial)
-                                    .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 0.8))
-                                    .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 4)
-                            )
-                            Text(app.name)
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(24)
-        }
-        .navigationTitle(AppTab.apps.ecosystemTitle)
-        .navigationBarTitleDisplayMode(.large)
-        .fullScreenCover(isPresented: Binding(
-            get: { browserURL != nil },
-            set: { if !$0 { browserURL = nil } }
-        )) {
-            if let browserURL {
-                InAppBrowserScreen(url: browserURL) {
-                    self.browserURL = nil
-                }
-            }
-        }
-    }
-}
-
 /// Full-screen in-app browser: the X in the top-left is the ONLY way out (full-screen cover,
 /// so there's no slide-down to dismiss).
 ///
-/// While the browser is up, the app powers down like it was backgrounded: node discovery
-/// pauses, the chat poll timer stops, the KaPosts notification poller stops, and (in
-/// remote-push mode) the UTXO subscription is released so notifications arrive via push -
+/// While the browser is up, the app powers down like it was backgrounded: node discovery pauses
+/// and (in remote-push mode) the UTXO subscription is released so notifications arrive via push -
 /// exactly the closed-app path. All of it resumes when the X is tapped.
 struct InAppBrowserScreen: View {
     let url: URL
@@ -5528,10 +5009,8 @@ struct InAppBrowserScreen: View {
     private func powerDownForBrowsing() {
         Task { @MainActor in
             await NodePoolService.shared.pauseDiscovery()
-            ChatService.shared.stopPollingTimerOnly()
-            KaPostsNotificationService.shared.stop()
             if AppSettings.load().notificationMode == .remotePush {
-                ChatService.shared.pauseUtxoSubscriptionForRemotePush()
+                WalletService.shared.pauseUtxoSubscriptionForRemotePush()
             }
         }
     }
@@ -5539,10 +5018,9 @@ struct InAppBrowserScreen: View {
     private func powerUpAfterBrowsing() {
         Task { @MainActor in
             await NodePoolService.shared.resumeDiscovery()
-            ChatService.shared.startPolling()
-            KaPostsNotificationService.shared.start()
+            WalletService.shared.startPolling()
             if AppSettings.load().notificationMode == .remotePush {
-                await ChatService.shared.resumeUtxoSubscriptionForRemotePush()
+                await WalletService.shared.resumeUtxoSubscriptionForRemotePush()
             }
         }
     }

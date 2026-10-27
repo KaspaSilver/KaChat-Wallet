@@ -197,26 +197,7 @@ struct ImportWalletView: View {
     /// Performs the import with the chosen passphrase ("" = none). Called from the passphrase step.
     /// Throwing surfaces the error on that screen and lets the user retry.
     private func commitImport(passphrase: String) async throws {
-        // Arm the Welcome Guide before importing (see ImportWalletView history): importWallet sets
-        // `currentWallet` and suspends at an await, which can mount MainTabView - whose onAppear
-        // consumes this one-shot flag - before control returns here.
-        walletManager.justCreatedNewWallet = true
-        // Nothing syncs while the wizard is on screen: an import's from-genesis sync of every
-        // contact ingests on the main actor, which is what made typing through setup crawl.
-        // Released by the guide's Finish (or by MainTabView, if no guide ends up shown).
-        ChatService.shared.holdSyncForOnboarding()
-        // Import-only marker (create never sets it): lets the Welcome Guide's funding step offer
-        // "Change Chatting Address" - only an imported seed can have its identity at a nonzero
-        // derivation index. Cleared by the guide on Finish, or here on failure.
-        walletManager.justImportedWallet = true
-        do {
-            _ = try await walletManager.importWallet(from: seedPhraseText, alias: alias, passphrase: passphrase, family: sourceFamily)
-        } catch {
-            walletManager.justCreatedNewWallet = false
-            walletManager.justImportedWallet = false
-            ChatService.shared.releaseSyncForOnboarding()
-            throw error
-        }
+        _ = try await walletManager.importWallet(from: seedPhraseText, alias: alias, passphrase: passphrase, family: sourceFamily)
     }
 }
 

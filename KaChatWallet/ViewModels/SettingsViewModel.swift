@@ -1,11 +1,6 @@
 import Foundation
 import Combine
 
-/// Thread-safe cache for `AppSettings.load()`. Load used to do a UserDefaults read + a fresh
-/// JSONDecoder + a full ~25-field decode on EVERY call - and it's called from hot paths (per
-/// Kaspa block in the group/public chat scanners at ~10 blocks/sec, per day-separator render, per
-/// API request). Invalidated whenever settings change (`.settingsDidChange` is posted by every
-/// write path: `AppSettings.save` and `SettingsViewModel.saveSettings`).
 /// The Testnet toggle's choice, waiting for the next launch. The wallet address, the node pool and
 /// every service are set up for one network at launch, so switching `networkType` live left the
 /// app half on each: indexer, push and .kachat moved at once while the wallet and node stayed,
@@ -33,6 +28,9 @@ enum PendingNetworkSwitch {
     }
 }
 
+/// Thread-safe cache for `AppSettings.load()`, which is called from hot paths (per API request,
+/// per row render). Invalidated whenever settings change (`.settingsDidChange` is posted by every
+/// write path: `AppSettings.save` and `SettingsViewModel.saveSettings`).
 private final class AppSettingsCache: @unchecked Sendable {
     static let shared = AppSettingsCache()
     private let lock = NSLock()
@@ -50,198 +48,37 @@ private final class AppSettingsCache: @unchecked Sendable {
     func invalidate() { lock.lock(); defer { lock.unlock() }; cached = nil }
 }
 
-/// Per-account dock layout (tab order + which tabs are hidden). The dock is PER ACCOUNT: the
-/// same install can hold multiple accounts, each with its own arrangement. Stored as one JSON
-/// blob per wallet address; `AppSettings.load()` overlays the active account's blob onto the
-/// global settings, and every save writes the current dock fields back to that account's blob.
-/// An account with no blob yet inherits the global values (continuity for the account that
-/// existed before this feature, a sensible starting point for new ones) and diverges on its
-/// first dock change.
-struct DockOverlay: Codable {
-    var tabOrder: [String]
-    var hiddenTabs: [String]
-    /// Placement, per account. Optional so overlays written before placement existed still
-    /// decode; a nil one leaves whatever the global blob's migration produced in place rather
-    /// than overwriting it with an empty dock.
-    var dockTabs: [String]?
-    var hubTabs: [String]?
-}
-
 /// Extension to load settings from any context (not MainActor-isolated)
 extension AppSettings {
-    static func dockOverlayKey(for address: String) -> String { "kachat_dock_overlay_\(address)" }
-
-    /// The active wallet address, from the app-group defaults (kept current by
-    /// SharedDataManager.syncWalletAddressForExtension on every load/switch/logout) - readable
-    /// from any context, unlike the MainActor-bound WalletManager.
-    static func activeDockAddress() -> String? {
-        (SharedDataManager.sharedDefaultsValue(forKey: "wallet_address") as? String)
-            .flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    mutating func applyDockOverlay(_ overlay: DockOverlay) {
-        tabOrder = overlay.tabOrder
-        if let overlayDock = overlay.dockTabs, !overlayDock.isEmpty {
-            dockTabs = overlayDock
-        }
-        if let overlayHub = overlay.hubTabs, !overlayHub.isEmpty {
-            hubTabs = overlayHub
-        }
-        hidePortfolioTab = overlay.hiddenTabs.contains(AppTab.portfolio.rawValue)
-        hideColdStorageTab = overlay.hiddenTabs.contains(AppTab.coldStorage.rawValue)
-        hideSwapTab = overlay.hiddenTabs.contains(AppTab.swap.rawValue)
-        hideKaPostsTab = overlay.hiddenTabs.contains(AppTab.kaposts.rawValue)
-        hidePublicChats = overlay.hiddenTabs.contains(AppTab.publicChats.rawValue)
-        hideAppsTab = overlay.hiddenTabs.contains(AppTab.apps.rawValue)
-        hideChessTab = overlay.hiddenTabs.contains(AppTab.chess.rawValue)
-        hideMoreItem = overlay.hiddenTabs.contains(AppTab.more.rawValue)
-    }
-
-    func dockOverlay() -> DockOverlay {
-        // Raw hide flags, NOT AppTab.isEnabled: isEnabled also applies the Simple Mode mask
-        // (Swap/KaPosts/Public Chats forced off), and baking that mask into the persisted
-        // per-account overlay would leave those tabs hidden even after Simple Mode is turned
-        // back off. The overlay must only ever record the user's own dock choices.
-        var hidden: [String] = []
-        if hidePortfolioTab { hidden.append(AppTab.portfolio.rawValue) }
-        if hideColdStorageTab { hidden.append(AppTab.coldStorage.rawValue) }
-        if hideSwapTab { hidden.append(AppTab.swap.rawValue) }
-        if hideKaPostsTab { hidden.append(AppTab.kaposts.rawValue) }
-        if hidePublicChats { hidden.append(AppTab.publicChats.rawValue) }
-        if hideAppsTab { hidden.append(AppTab.apps.rawValue) }
-        if hideChessTab { hidden.append(AppTab.chess.rawValue) }
-        if hideMoreItem { hidden.append(AppTab.more.rawValue) }
-        return DockOverlay(tabOrder: tabOrder, hiddenTabs: hidden, dockTabs: dockTabs, hubTabs: hubTabs)
-    }
-
-    /// Writes the dock fields of `settings` to the active account's overlay blob. Called from
-    /// both save paths so the per-account copy can never drift from what the user sees.
-    static func persistDockOverlay(_ settings: AppSettings) {
-        guard let address = activeDockAddress() else { return }
-        if let data = try? JSONEncoder().encode(settings.dockOverlay()) {
-            UserDefaults.standard.set(data, forKey: dockOverlayKey(for: address))
-        }
-    }
+    /// Retired indexer defaults - `indexer.kasia.fyi` (offline) and the community
+    /// `indexer.kasia.wtf` - now replaced by KaChat's own indexer.
+    private static let legacyIndexerURLs = ["https://indexer.kasia.fyi", "https://indexer.kasia.wtf"]
 
     /// Load settings from UserDefaults (can be called from any context). Cached - see
     /// `AppSettingsCache`.
     static func load() -> AppSettings {
         if let cached = AppSettingsCache.shared.get() { return cached }
-        let userDefaults = UserDefaults.standard
-        guard let data = userDefaults.data(forKey: "kachat_app_settings"),
+        guard let data = UserDefaults.standard.data(forKey: "kachat_app_settings"),
               var settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             AppSettingsCache.shared.set(.default)
             return .default
         }
-        // One-time migration for anyone still pointed at a superseded default indexer - the
-        // offline kasia.fyi, or the previous community default kasia.wtf now replaced by KaChat's
-        // own indexer (kachat.duckdns.org). Users who set a custom indexer keep it; only the old
-        // shipped defaults are moved.
-        if settings.indexerURL == legacyDefaultIndexerURL || settings.indexerURL == legacyDefaultIndexerURLKasiaWtf {
+        // Anyone still pointed at a superseded default indexer moves to KaChat's own. A custom
+        // indexer is kept.
+        if legacyIndexerURLs.contains(settings.indexerURL) {
             settings.indexerURL = defaultIndexerURL
             save(settings)
-        }
-        // One-time migration for anyone still pointed at the public K social indexer
-        // (mainnet.kaspatalk.net) - KaPosts now runs on KaChat's own indexer. Users who set a
-        // custom KaPost indexer URL keep it; only the old shipped default is moved.
-        if settings.kaPostIndexerURL == legacyDefaultKaPostIndexerURL {
-            settings.kaPostIndexerURL = defaultKaPostIndexerURL
-            save(settings)
-        }
-        // One-time 4.0 dock rules: EVERY existing user gets KaPosts/Public Chats enabled.
-        // The decode fallbacks cover production 3.0 users (their blobs lack these keys), but
-        // 4.0 TestFlight builds already wrote hideKaPostsTab = true into saved blobs via the
-        // old defaults - this sentinel-guarded pass flips them once. The dock cap then does
-        // the right thing: full dock -> KaPosts/Public Chats cycle behind Chats. ("+More" no
-        // longer exists as a dock item, so hideMoreItem isn't touched anymore.)
-        let dockRulesKey = "kachat_dock_40_rules_applied"
-        if !userDefaults.bool(forKey: dockRulesKey) {
-            settings.hideKaPostsTab = false
-            settings.hidePublicChats = false
-            userDefaults.set(true, forKey: dockRulesKey)
-            save(settings)
-        }
-        // One-time 4.1 dock rules: Ecosystem replaces Swap's dock slot and takes over holding
-        // KaPosts, Public Chats and the websites list, so every existing user is moved onto the new
-        // arrangement rather than only new installs getting it. Their per-tab on/off choices are
-        // untouched - only the ORDER is reset, which is what decides who gets a dock slot.
-        let ecosystemRulesKey = "kachat_dock_41_ecosystem_applied"
-        if !userDefaults.bool(forKey: ecosystemRulesKey) {
-            settings.tabOrder = AppTab.defaultOrder.map(\.rawValue)
-            settings.hideEcosystemTab = false
-            userDefaults.set(true, forKey: ecosystemRulesKey)
-            save(settings)
-        }
-
-        // Its OWN key, deliberately, rather than another line inside the block above.
-        //
-        // That block's flag is set the first time it runs, so a rule added to it afterwards
-        // never executes for anyone who already ran it - which is exactly what happened here:
-        // the websites list stayed switched off on every device that had already taken the
-        // Kaspa Hub migration, and the decode default could not rescue it either, since a saved
-        // blob carries an explicit `hideAppsTab` and never falls back.
-        //
-        // One rule, one key. It costs a Bool in UserDefaults and it cannot silently no-op.
-        let websitesEnabledKey = "kachat_dock_41_websites_enabled"
-        if !userDefaults.bool(forKey: websitesEnabledKey) {
-            // Off by default while it had to win one of five dock slots; its home is now a tile
-            // in Kaspa Hub that costs nothing to keep.
-            settings.hideAppsTab = false
-            userDefaults.set(true, forKey: websitesEnabledKey)
-            save(settings)
-        }
-        // One-time placement migration. Tabs used to be on/off with the dock taking the first
-        // five of an order; they now have an explicit placement, and a blob saved before that has
-        // no `dockTabs` at all. Derived from what the user could actually SEE rather than reset to
-        // the default, so an arrangement they built is carried over instead of discarded - with
-        // Kaspa Hub guaranteed a slot, since it is what holds everything else.
-        let placementKey = "kachat_dock_41_placement_applied"
-        if !userDefaults.bool(forKey: placementKey) {
-            var dock = AppTab.resolvedOrder(from: settings)
-                .filter { $0.isEnabled(in: settings) && AppTab.assignable.contains($0) }
-            // The pinned tabs go where a fresh install puts them; `AppTab.visible` would reinsert
-            // them at read time anyway, but storing them keeps the saved arrangement honest.
-            for pinned in AppTab.pinnedToDock where !dock.contains(pinned) {
-                let position = AppTab.defaultDock.firstIndex(of: pinned) ?? dock.count
-                dock.insert(pinned, at: min(position, dock.count))
-            }
-            let placedDock = Array(dock.prefix(AppTab.maxDockItems))
-            settings.dockTabs = placedDock.map(\.rawValue)
-            // Everything else, in the app's default order, as this account's starting Hub order.
-            settings.hubTabs = AppTab.defaultOrder
-                .filter { AppTab.assignable.contains($0) && !placedDock.contains($0) }
-                .map(\.rawValue)
-            userDefaults.set(true, forKey: placementKey)
-            save(settings)
-        }
-
-        // Per-account dock: the active account's saved arrangement wins over the global blob.
-        if let address = activeDockAddress() {
-            if let data = userDefaults.data(forKey: dockOverlayKey(for: address)),
-               let overlay = try? JSONDecoder().decode(DockOverlay.self, from: data) {
-                settings.applyDockOverlay(overlay)
-            } else {
-                // First load for this account: freeze its inherited dock into its own blob NOW.
-                // Without this, an account that never saves settings would keep inheriting the
-                // global blob - which a later save on a DIFFERENT account overwrites, leaking
-                // that account's dock back into this one.
-                persistDockOverlay(settings)
-            }
         }
         AppSettingsCache.shared.set(settings)
         return settings
     }
 
-    /// Symmetric write path for services that don't hold a `SettingsViewModel` reference (e.g.
-    /// SwapService persisting the swap disclaimer flag) - same storage key/notification as
-    /// `SettingsViewModel.saveSettings()`, just callable without an instance.
+    /// Symmetric write path for services that don't hold a `SettingsViewModel` reference - same
+    /// storage key/notification as `SettingsViewModel.saveSettings()`, just callable without an
+    /// instance.
     static func save(_ settings: AppSettings) {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         UserDefaults.standard.set(data, forKey: "kachat_app_settings")
-        persistDockOverlay(settings)
-        // Keep the app-group mirror current on this path too - the Diagnostics page's Verbose
-        // API Logging toggle saves through here, and the NSE reads that flag from the mirror.
-        SharedDataManager.syncNotificationSettingsForExtension(settings)
         NotificationCenter.default.post(name: .settingsDidChange, object: settings)
     }
 }
@@ -262,9 +99,9 @@ final class SettingsViewModel: ObservableObject {
         let loaded = AppSettings.load()
         self.settings = loaded
         self.launchNetworkType = loaded.networkType
-        // Account switches post .settingsDidChange with a nil object (see WalletManager) so the
-        // new account's dock overlay takes effect immediately. Saves post WITH the settings
-        // object - skipped here, this instance already holds those values.
+        // A change made elsewhere posts .settingsDidChange with a nil object, so this instance
+        // reloads. Saves post WITH the settings object - skipped here, this instance already
+        // holds those values.
         NotificationCenter.default.addObserver(
             forName: .settingsDidChange, object: nil, queue: .main
         ) { [weak self] notification in
@@ -283,21 +120,9 @@ final class SettingsViewModel: ObservableObject {
     func saveSettings() {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         userDefaults.set(data, forKey: settingsKey)
-        AppSettings.persistDockOverlay(settings)
-        SharedDataManager.syncNotificationSettingsForExtension(settings)
 
         // Notify other services of settings changes
         NotificationCenter.default.post(name: .settingsDidChange, object: settings)
-    }
-
-    func resetToDefaults() {
-        // Simple Mode survives a settings reset (Danger Zone account wipe) - its password record
-        // lives in the Keychain and outlives UserDefaults, so the flag must not silently drop
-        // back to off without the password ever being entered.
-        let childModeEnabled = settings.childModeEnabled
-        settings = .default
-        settings.childModeEnabled = childModeEnabled
-        saveSettings()
     }
 
     /// Settings > Connection > Testnet. Only records the choice: the switch, with each network's
@@ -379,19 +204,10 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    var liveUpdatesEnabled: Bool {
-        get { settings.liveUpdatesEnabled }
-        set {
-            settings.liveUpdatesEnabled = newValue
-            saveSettings()
-        }
-    }
-
     /// Validates and applies a new trusted-node address (empty = automatic discovery instead of a
     /// pinned node). Returns a user-facing error message and leaves `settings` untouched if
-    /// `value` is non-empty but not a valid endpoint; returns `nil` on success. Shared by
-    /// `ConnectionSettingsView` and the Welcome Guide's node-connection step so both stay in sync
-    /// with `NodePoolService`, not just `AppSettings`.
+    /// `value` is non-empty but not a valid endpoint; returns `nil` on success. Keeps
+    /// `NodePoolService` in step, not just `AppSettings`.
     @discardableResult
     func applyTrustedNode(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -407,13 +223,9 @@ final class SettingsViewModel: ObservableObject {
         return nil
     }
 
-    /// Sets or clears the standard `AppleLanguages` preferred-language override. The main app
-    /// itself doesn't need this (it picks up a language change immediately via
-    /// `.environment(\.locale, ...)` in `KaChatApp.swift`, no restart) - this is for the pieces
-    /// that run as their own separate OS process and can't observe that in-memory environment
-    /// override at all: the Notification Service Extension, Share Extension, and the OS's own
-    /// Bundle-driven resolution on the next cold launch of any of them. Shared by the Settings >
-    /// Language picker and the Welcome Guide's language step.
+    /// Sets or clears the standard `AppleLanguages` preferred-language override. The app picks up
+    /// a language change at once via `.environment(\.locale, ...)` in `KaChatApp.swift`; this is
+    /// for the OS's own Bundle-driven resolution (alerts, system strings) on the next launch.
     func applyLanguagePreference(_ language: AppLanguage) {
         if let code = language.appleLanguageCode {
             UserDefaults.standard.set([code], forKey: "AppleLanguages")

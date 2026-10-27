@@ -3,7 +3,7 @@ import CryptoKit
 import P256K
 
 /// Spending-chain address system: a second BIP44 *account* branch off the same wallet seed,
-/// distinct from the identity/chatting address's account (see `WalletManager.deriveKeysFromSeed`,
+/// distinct from the identity/main address's account (see `WalletManager.deriveKeysFromSeed`,
 /// account 0). Addresses are always re-derived live from the seed + index rather than persisted -
 /// only the index bounds are stored, in UserDefaults scoped per wallet address (see
 /// `currentSpendingAddressIndex`'s doc comment for why that, and not `Wallet`'s own
@@ -459,7 +459,7 @@ extension WalletManager {
         guard let chainKey else { return index }
         for _ in 0..<20 {
             guard let address = quantumAddress(at: index, chainKey: chainKey, owner: owner),
-                  await ChatService.shared.spendingAddressUsedState(address) == true else { return index }
+                  await WalletService.shared.spendingAddressUsedState(address) == true else { return index }
             AppLog.log("[WalletManager] Quantum slot %d already has history - skipping it", index - Self.quantumIndexBase)
             guard accountStillSaved(owner) else { return index + 1 }
             setMaxQuantumAddressIndex(index - Self.quantumIndexBase, owner: owner)
@@ -503,7 +503,7 @@ extension WalletManager {
             if entry.balanceSompi > 0 { continue }
             // Recycle only on a CONFIRMED-unused probe; nil (probe failed) skips the index -
             // extending the chain below is always safe, recycling an unknown one is not.
-            let usedState = await ChatService.shared.spendingAddressUsedState(entry.address)
+            let usedState = await WalletService.shared.spendingAddressUsedState(entry.address)
             if usedState == false {
                 return entry.index
             }
@@ -564,7 +564,7 @@ extension WalletManager {
         // legacy pointer, even unused, carries its key in the address itself (P2PK), so the QR
         // moves to the quantum chain the first time it is opened after the upgrade.
         if let index = receiveAddressIndex, Self.isQuantumIndex(index), let address = spendingAddress(at: index),
-           await ChatService.shared.spendingAddressUsedState(address) != true {
+           await WalletService.shared.spendingAddressUsedState(address) != true {
             chosen = (index, address)
         } else {
             // Rule 2: the lowest quantum slot never used (recycling a hidden unused one), else a
@@ -591,7 +591,7 @@ extension WalletManager {
             guard entry.hidden else { continue }
             if entry.isCurrent { continue }
             if entry.balanceSompi > 0 { continue }
-            if await ChatService.shared.spendingAddressUsedState(entry.address) == false {
+            if await WalletService.shared.spendingAddressUsedState(entry.address) == false {
                 return entry.index
             }
         }
@@ -602,7 +602,7 @@ extension WalletManager {
 
     /// Quantum addresses this wallet has spent FROM: the spend put their key on chain for good,
     /// so the shield comes off (KIP-22). Marked the moment the app sends, and by the on-chain
-    /// probe (`ChatService.quantumAddressSpentState`) for spends made elsewhere. Per wallet;
+    /// probe (`WalletService.quantumAddressSpentState`) for spends made elsewhere. Per wallet;
     /// never unmarked - a revealed key cannot be unrevealed.
     func markQuantumAddressSpent(_ address: String, owner: String? = nil) {
         // `owner`: the account whose address spent, when the caller started before an await
@@ -649,31 +649,6 @@ extension WalletManager {
         hidden.formUnion(newlyCovered)
         hidden.remove(index)
         setHiddenIndices(hidden, owner: owner)
-    }
-
-    /// Reveals and returns `count` brand-new spending-chain slots in one step - used by Request
-    /// Payment's Fresh Address. Indices start strictly past `maxSpendingAddressIndex`, and the max is
-    /// bumped to cover them before returning, so: (a) they have never been revealed, funded, or
-    /// offered before, and (b) no later payment-change address or reservation can ever land on
-    /// the same index (`sendPaymentInternal`'s fresh change index and this both always start at
-    /// max+1). The addresses stay listed in Manage Addresses like any other revealed slot.
-    ///
-    /// Returns an empty array (reserving nothing, bumping nothing) if derivation fails.
-    func reserveFreshSpendingAddresses(count: Int) async -> [(index: Int, address: String)] {
-        guard count > 0, let owner = currentWallet?.publicAddress, let chainKey = quantumChainKey() else { return [] }
-        // Fresh addresses handed to someone else are exactly what the quantum chain is for
-        // (KIP-22): never revealed, never funded, key hidden until they spend. Probe, addresses
-        // and the raised chain end all belong to the account active at the start (IOS-109).
-        let base = await verifiedFreshQuantumIndex(owner: owner, chainKey: chainKey) - Self.quantumIndexBase
-        var result: [(index: Int, address: String)] = []
-        for offset in 0..<count {
-            let index = Self.quantumIndexBase + base + offset
-            guard let address = quantumAddress(at: index, chainKey: chainKey, owner: owner) else { return [] }
-            result.append((index: index, address: address))
-        }
-        guard accountStillSaved(owner) else { return [] }
-        setMaxQuantumAddressIndex(base + count - 1, owner: owner)
-        return result
     }
 
     /// The Discover sweep's own copy of the account it started for: that account's address and
@@ -780,26 +755,18 @@ extension WalletManager {
         return result
     }
 
-    /// True if `address` is one of this wallet's own revealed spending-chain addresses
-    /// (0...maxSpendingAddressIndex) - used to reject a received pool that tries to feed our own
-    /// addresses back to us. One seed decrypt + one derivation per revealed index; call off the
-    /// hot path.
-    func isOwnSpendingAddress(_ address: String) -> Bool {
-        allSpendingAddresses().contains(address)
-    }
-
     /// Every revealed spending-chain address (0...maxSpendingAddressIndex), derived with a
     /// single seed decrypt via the shared change-node key - for callers that need the whole
     /// set WITHOUT balances (e.g. AddressActivityNotifier's own-address watch set), unlike
     /// `getSpendingAddressList()` which also fires a UTXO fetch.
-    /// Which of this wallet's own addresses `address` is: "Chatting Address", or a spending
+    /// Which of this wallet's own addresses `address` is: "Main Address", or a spending
     /// address's name ("Address #3", or the name the person gave it). nil for anyone else's.
     /// Cheap enough for a view body: the address-to-index map is built once per account and
     /// address count (`spendingAddresses(inRange:)` serves it from its cache).
     func ownAddressLabel(for address: String) -> String? {
         let target = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !target.isEmpty, let wallet = currentWallet?.publicAddress.lowercased() else { return nil }
-        if target == wallet { return AppLocalization.string("Chatting Address") }
+        if target == wallet { return AppLocalization.string("Main Address") }
         let key = "\(wallet)|\(maxSpendingAddressIndex)|q\(maxQuantumAddressIndex)"
         if Self.ownAddressIndexCache?.key != key {
             var map: [String: Int] = [:]
@@ -822,21 +789,6 @@ extension WalletManager {
 
     private static var ownAddressIndexCache: (key: String, map: [String: Int])?
 
-    /// Every spending address this phone has derived for the account `address` (either network
-    /// encoding, either network), read from that account's derived-address cache - for a saved
-    /// account that isn't the active one, whose seed isn't decrypted (IOS-083). An account
-    /// never active since the cache existed has none here.
-    func cachedSpendingAddresses(ofAccount address: String) -> [String] {
-        var out: [String] = []
-        for variant in Self.accountAddressVariants(address) {
-            for network in NetworkType.allCases {
-                let key = "kachat_spending_derived_addresses_\(variant)_\(network.rawValue)"
-                out += DerivedAddressStore.addresses(key).values
-            }
-        }
-        return out
-    }
-
     func allSpendingAddresses() -> [String] {
         guard let changeKey = spendingChangeKey() else { return [] }
         var out = (0...maxSpendingAddressIndex).compactMap { spendingAddress(at: $0, changeKey: changeKey) }
@@ -845,22 +797,6 @@ extension WalletManager {
             out += (0...quantumMax).compactMap { quantumAddress(at: Self.quantumIndexBase + $0, chainKey: chainKey) }
         }
         return out
-    }
-
-    /// `allSpendingAddresses()` plus the chatting address, lowercased - MEMOIZED per account
-    /// and chain lengths. The contract filter (`isKachatContractTransaction`) asks this per
-    /// TRANSACTION while a sync runs, and the derivation behind `allSpendingAddresses()` is a
-    /// seed decrypt plus one derivation per address, on the main actor: uncached, the launch
-    /// catch-up sync pinned the main thread at the splash screen until the watchdog killed
-    /// the app.
-    func ownAddressSetLowercased() -> Set<String> {
-        guard let wallet = currentWallet?.publicAddress.lowercased() else { return [] }
-        let key = "\(wallet)|\(maxSpendingAddressIndex)|q\(maxQuantumAddressIndex)"
-        if let cached = Self.ownAddressSetCache, cached.key == key { return cached.set }
-        var set = Set(allSpendingAddresses().map { $0.lowercased() })
-        set.insert(wallet)
-        Self.ownAddressSetCache = (key, set)
-        return set
     }
 
     private static var ownAddressSetCache: (key: String, set: Set<String>)?
@@ -881,7 +817,7 @@ extension WalletManager {
     }
 
     /// Hides every revealed spending address at once (Address Visibility > Hide All): Manage
-    /// Addresses then starts empty under the chatting address.
+    /// Addresses then starts empty under the main address.
     func hideAllSpendingAddresses() {
         var hidden = Set(0...max(0, maxSpendingAddressIndex))
         if maxQuantumAddressIndex >= 0 {
@@ -910,7 +846,7 @@ extension WalletManager {
 
     /// Live-derived list of every revealed spending address (0...maxSpendingAddressIndex),
     /// with current balances. `everUsed` is left at its default (false) - callers that need it
-    /// check history separately (`ChatService.hasSpendingAddressBeenUsed`), same as before.
+    /// check history separately (`WalletService.hasSpendingAddressBeenUsed`), same as before.
     func getSpendingAddressList() async -> [SpendingAddressEntry] {
         let maxIndex = maxSpendingAddressIndex
         let activeIndex = currentSpendingAddressIndex
@@ -1333,7 +1269,7 @@ enum DerivedAddressStore {
 
 extension Notification.Name {
     /// Posted after the primary spending address pointer changes - a manual "Set as Primary"
-    /// or the automatic post-send rotation (`ChatService.sendPaymentInternal` calling
+    /// or the automatic post-send rotation (`WalletService.sendPaymentInternal` calling
     /// `setActiveSpendingAddress` with the fresh change index). Open screens that render an
     /// `isCurrent` star or gate actions on "not the primary" reload on it so the old primary
     /// row becomes hideable right away.

@@ -8,18 +8,13 @@ struct AddressBookTombstone: Codable, Equatable, Hashable {
     var deletedAt: Date
 }
 
-/// The Address Book (Kaspa Hub > Address Book): saved Kaspa addresses with a name and a note.
+/// The Address Book (Wallet > Address Book): saved Kaspa addresses with a name and a note.
+/// - one per wallet, so switching wallets never shows who another wallet knows;
+/// - on this device (UserDefaults), and on the user's Nextcloud when they connect one
+///   (`NextcloudService`: the export file in the KaChat folder), so a restore or another device
+///   brings it back. Never in the phone's Contacts.
 ///
-/// It replaces syncing with the phone's Contacts (removed 2026-10-08). That linked Kaspa addresses
-/// to phone numbers in people's address books, which sync to iCloud/Google and which any app with
-/// Contacts access can read. The Address Book lives only in KaChat:
-/// - one per wallet, like chats and contacts, so switching wallets never shows who another wallet
-///   knows;
-/// - on this device (UserDefaults) and in the wallet's chat backup (`addressBook` +
-///   `addressBookDeleted` in the archive), so a restore or another device brings it back.
-///
-/// A saved name is also how KaChat shows that address when you haven't named the chat contact
-/// yourself (`ContactsManager.displayName`).
+/// A saved name is how the app shows that address (`displayName(for:)`).
 ///
 /// An entry's picture is either a photo you assign to it, or else exactly the avatar that address
 /// set on its own profile (`AddressBookAvatar`). Assigned photos are your data, not cache: they live
@@ -41,7 +36,6 @@ final class AddressBookManager: ObservableObject {
 
     private static let entriesKeyPrefix = "kachat_address_book_wallet_"
     private static let deletedKeyPrefix = "kachat_address_book_deleted_wallet_"
-    private static let migratedKeyPrefix = "kachat_address_book_migrated_v1_wallet_"
 
     private let photoCache = NSCache<NSString, UIImage>()
 
@@ -52,8 +46,7 @@ final class AddressBookManager: ObservableObject {
     // MARK: - Wallet
 
     /// Loads the book of `walletAddress` (nil: no wallet, an empty book). Called by
-    /// `ContactsManager.setActiveWalletAddress` right after it has loaded that wallet's contacts,
-    /// so the one-time migration below sees them.
+    /// WalletManager on every wallet load, account switch and logout.
     func setActiveWalletAddress(_ walletAddress: String?) {
         let wallet = walletAddress.map(Self.normalize)
         self.walletAddress = wallet
@@ -72,30 +65,6 @@ final class AddressBookManager: ObservableObject {
         rebuildIndex()
         photoCache.removeAllObjects()
         photoVersion &+= 1
-        migrateLinkedNames(from: ContactsManager.shared.contacts)
-    }
-
-    /// Once per wallet: every chat contact that was linked to a phone contact becomes an Address
-    /// Book entry with that phone contact's name and the Kaspa address only (no phone number, no
-    /// link).
-    private func migrateLinkedNames(from contacts: [Contact]) {
-        guard let walletAddress else { return }
-        let flag = Self.migratedKeyPrefix + walletAddress
-        guard !defaults.bool(forKey: flag) else { return }
-        var added = false
-        for contact in contacts {
-            guard let name = contact.legacyLinkedName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !name.isEmpty, entry(for: contact.address) == nil else { continue }
-            entries.append(AddressBookEntry(address: Self.normalize(contact.address), name: name))
-            added = true
-        }
-        defaults.set(true, forKey: flag)
-        if added {
-            entries = Self.sorted(entries)
-            rebuildIndex()
-            persist()
-            AppLog.log("[AddressBook] moved linked phone-contact names into the Address Book")
-        }
     }
 
     // MARK: - Reading
@@ -103,6 +72,22 @@ final class AddressBookManager: ObservableObject {
     func entry(for address: String?) -> AddressBookEntry? {
         guard let address, !address.isEmpty, let i = byAddress[Self.normalize(address)] else { return nil }
         return entries[i]
+    }
+
+    /// How the app shows `address`: the name you saved for it; else who it is on chain (its
+    /// `.kachat` name on testnet, its KNS domain elsewhere); else the short address. Your own
+    /// main address always goes by who you are on chain.
+    func displayName(for address: String) -> String {
+        let isOwn = address.lowercased() == WalletManager.shared.currentWallet?.publicAddress.lowercased()
+        if !isOwn, let saved = entry(for: address)?.customName { return saved }
+        if KachatNamesService.isEnabled {
+            if let label = KachatNamesRegistry.shared.cachedIdentity(for: address)?.label {
+                return "\(label).kachat"
+            }
+            return KaspaAddress.shortAlias(address)
+        }
+        if let domain = KNSService.shared.profileCache[address]?.domainName, !domain.isEmpty { return domain }
+        return KaspaAddress.shortAlias(address)
     }
 
     func search(_ query: String) -> [AddressBookEntry] {
@@ -147,7 +132,7 @@ final class AddressBookManager: ObservableObject {
         // who it is on chain again (`AddressBookEntry.customName`).
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         // the network the app runs on only: the other network's address is the same key on the
-        // other chain, a chat with it is never read and is dropped on the next launch (IOS-063)
+        // other chain, it can never be paid from here (IOS-063)
         if let reason = KaspaAddress.otherNetworkReason(address) { throw SaveError.otherNetwork(reason) }
         guard KaspaAddress.isValidOnActiveNetwork(address) else { throw SaveError.invalidAddress }
         let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -259,7 +244,7 @@ final class AddressBookManager: ObservableObject {
         if let root = Self.photosRoot { try? FileManager.default.removeItem(at: root) }
         photoCache.removeAllObjects()
         photoVersion &+= 1
-        if walletAddress != nil { NextcloudService.shared.noteMessageActivity() }
+        if walletAddress != nil { NextcloudService.shared.noteAddressBookChanged() }
     }
 
     private nonisolated static var photosRoot: URL? {
@@ -359,7 +344,7 @@ final class AddressBookManager: ObservableObject {
         // A nameless entry counts like any other (IOS-089): it may carry a note and a photo, and a
         // name cleared elsewhere must clear here too when it is the newer one.
         let addressed = file.entries.filter {
-            ContactsManager.shared.isValidKaspaAddress(Self.normalize($0.address))
+            KaspaAddress.isValid(Self.normalize($0.address))
         }
         let valid = addressed.filter { KaspaAddress.isValidOnActiveNetwork(Self.normalize($0.address)) }
         let skipped = addressed.count - valid.count
@@ -397,7 +382,7 @@ final class AddressBookManager: ObservableObject {
 
     // MARK: - Backup
 
-    /// What the chat backup carries for this wallet: each entry with its assigned photo (base64
+    /// What the backup and export carry for this wallet: each entry with its assigned photo (base64
     /// JPEG) attached.
     var archiveEntries: [AddressBookEntry] {
         entries.map { entry in
@@ -440,10 +425,9 @@ final class AddressBookManager: ObservableObject {
         deleted = Dictionary(merged.tombstones.map { ($0.address, $0.deletedAt) }, uniquingKeysWith: max)
         rebuildIndex()
         persist()
-        SharedDataManager.syncContactsForExtension()
     }
 
-    /// The merge both restore and the shared-backup upload use (`ChatService.mergeBackupArchives`).
+    /// The merge both restore and the shared-backup upload use (`WalletService.mergeBackupArchives`).
     nonisolated static func merge(
         entries sides: [[AddressBookEntry]], tombstones tombSides: [[AddressBookTombstone]]
     ) -> (entries: [AddressBookEntry], tombstones: [AddressBookTombstone]) {
@@ -491,8 +475,7 @@ final class AddressBookManager: ObservableObject {
 
     /// A user edit: names in notifications and the share sheet follow, and the backup owes an upload.
     private func didChange() {
-        SharedDataManager.syncContactsForExtension()
-        NextcloudService.shared.noteMessageActivity()
+        NextcloudService.shared.noteAddressBookChanged()
     }
 
     private func persist() {

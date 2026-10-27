@@ -5,11 +5,13 @@ A Kaspa wallet for iPhone, from the makers of KaChat.
 - **Portfolio** - your balance, its value, price and network charts, and every transaction
 - **Cold Storage** - watch and spend funds held on an air-gapped KasSigner device (signing happens on the device, by QR)
 - **.kachat** - the .kachat names marketplace: find, claim, buy and sell names
-- **Addresses** - saved Kaspa addresses with names
-- **Wallet** - receive, your addresses, your domains, settings
+- **Wallet** - receive, send, your addresses, your domains, and the Address Book (saved Kaspa
+  addresses with names, backed up to your own Nextcloud if you connect one)
+- **Settings** - appearance, security, connection, notifications, storage
 
 KaChat Wallet started from KaChat's own wallet code
-([KaChat-iPhone](https://github.com/KaspaSilver/KaChat-iPhone)) so KaChat can focus on chats.
+([KaChat-iPhone](https://github.com/KaspaSilver/KaChat-iPhone)) so KaChat can focus on chats. It
+carries no chat code: only the wallet.
 
 ## For the server
 

@@ -3,10 +3,10 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-// The Address Book (Kaspa Hub > Address Book): saved Kaspa addresses with a name and a note, per
+// The Address Book (Wallet > Address Book): saved Kaspa addresses with a name and a note, per
 // wallet. It replaced syncing with the phone's Contacts - see `AddressBookManager`.
 
-/// Kaspa Hub > Address Book (also a dock tab, if placed there).
+/// Wallet > Address Book, opened as a sheet.
 struct AddressBookView: View {
     @ObservedObject private var book = AddressBookManager.shared
     @ObservedObject private var nextcloud = NextcloudService.shared
@@ -72,7 +72,7 @@ struct AddressBookView: View {
                     }
                 }
             }
-            // Add and Import / Export live behind one floating + (like Chats'), not in the bar.
+            // Add and Import / Export live behind one floating +, not in the bar.
             .overlay(alignment: .bottomTrailing) { actionsButton }
             .sheet(isPresented: $showAdd) {
                 AddressBookEntryEditor(address: nil) { _ in }
@@ -103,7 +103,7 @@ struct AddressBookView: View {
     // MARK: Add / import / export
 
     /// The floating glass "+" in the bottom-right corner, opening the actions half sheet - the
-    /// same button Chats uses for New.
+    /// same button the Wallet tab uses for Send.
     private var actionsButton: some View {
         Button {
             Haptics.impact(.light)
@@ -291,7 +291,7 @@ struct AddressBookView: View {
 }
 
 /// An Address Book picture: the photo you assigned to the entry, else exactly the avatar the
-/// address set on its own profile, else the person glyph. Never a photo carried for a chat contact.
+/// address set on its own profile, else the person glyph.
 struct AddressBookAvatar: View {
     let address: String
     var size: CGFloat = 44
@@ -308,8 +308,7 @@ struct AddressBookAvatar: View {
             fallbackText: "",
             size: size,
             overrideImage: assigned,
-            contactAddress: address,
-            includeBackupPhoto: false
+            contactAddress: address
         )
     }
 }
@@ -322,10 +321,10 @@ struct AddressBookRow: View {
         HStack(spacing: 12) {
             AddressBookAvatar(address: entry.address, size: 38)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: entry.customName ?? ContactsManager.shared.displayName(for: entry.address))
+                Text(verbatim: entry.customName ?? AddressBookManager.shared.displayName(for: entry.address))
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
-                Text(verbatim: Contact.generateDefaultAlias(from: entry.address))
+                Text(verbatim: KaspaAddress.shortAlias(entry.address))
                     .font(.caption.monospaced())
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -348,9 +347,6 @@ struct AddressBookEntryDetail: View {
     @State private var copied = false
 
     private var entry: AddressBookEntry? { book.entry(for: address) }
-    private var isOwnAddress: Bool {
-        AddressBookManager.normalize(walletManager.currentWallet?.publicAddress ?? "") == AddressBookManager.normalize(address)
-    }
 
     var body: some View {
         Group {
@@ -359,7 +355,7 @@ struct AddressBookEntryDetail: View {
                     Section {
                         VStack(spacing: 10) {
                             AddressBookAvatar(address: entry.address, size: 76)
-                            Text(verbatim: entry.customName ?? ContactsManager.shared.displayName(for: entry.address))
+                            Text(verbatim: entry.customName ?? AddressBookManager.shared.displayName(for: entry.address))
                                 .font(.title3.weight(.semibold))
                                 .multilineTextAlignment(.center)
                             if !entry.note.isEmpty {
@@ -397,14 +393,6 @@ struct AddressBookEntryDetail: View {
                             Label("Send KAS", systemImage: "paperplane")
                         }
                         .disabled(walletManager.currentWallet == nil || otherNetwork != nil)
-                        if !isOwnAddress {
-                            Button {
-                                openChat(with: entry.address)
-                            } label: {
-                                Label("Message", systemImage: "bubble.left")
-                            }
-                            .disabled(otherNetwork != nil)
-                        }
                     } footer: {
                         if let otherNetwork { Text(verbatim: otherNetwork) }
                     }
@@ -438,7 +426,7 @@ struct AddressBookEntryDetail: View {
                     }
                 }
                 .confirmationDialog(
-                    Text("Delete \(entry.customName ?? ContactsManager.shared.displayName(for: entry.address)) from your Address Book?"),
+                    Text("Delete \(entry.customName ?? AddressBookManager.shared.displayName(for: entry.address)) from your Address Book?"),
                     isPresented: $confirmDelete,
                     titleVisibility: .visible
                 ) {
@@ -457,20 +445,9 @@ struct AddressBookEntryDetail: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// Why this entry can't be paid or messaged here: it's the other network's address (saved
-    /// before IOS-063, or restored from a backup).
+    /// Why this entry can't be paid here: it's the other network's address (saved before
+    /// IOS-063, or restored from a backup).
     private var otherNetwork: String? { KaspaAddress.otherNetworkReason(address) }
-
-    /// The same path KaPosts takes to open a chat from anywhere in the app.
-    private func openChat(with address: String) {
-        guard KaspaAddress.isValidOnActiveNetwork(address) else { return }
-        let contact = ContactsManager.shared.getOrCreateContact(address: address)
-        _ = ChatService.shared.getOrCreateConversation(for: contact)
-        ChatService.shared.pendingChatNavigation = contact.address
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            NotificationCenter.default.post(name: .openChat, object: nil, userInfo: ["contactAddress": contact.address])
-        }
-    }
 }
 
 enum AddressBookEditResult: Equatable {
@@ -728,14 +705,7 @@ struct AddressBookEntryEditor: View {
             case .some(.none): photo = .removed
             case .some(.some): photo = pendingPhotoData.map { .set($0) } ?? .unchanged
             }
-            let saved = try book.save(address: effectiveAddress, name: name, note: note, photo: photo)
-            // One name per person: a chat with them goes by the same one - so clearing it here
-            // really clears it, and they go by their .kachat name or their address.
-            let contacts = ContactsManager.shared
-            if var contact = contacts.getContact(byAddress: saved.address), contact.assignedName != saved.customName {
-                contact.alias = saved.customName ?? Contact.generateDefaultAlias(from: contact.address)
-                contacts.updateContact(contact)
-            }
+            _ = try book.save(address: effectiveAddress, name: name, note: note, photo: photo)
             onDone(.saved)
             dismiss()
         } catch {
@@ -744,7 +714,7 @@ struct AddressBookEntryEditor: View {
     }
 }
 
-/// Pick from the Address Book, full screen: one address (New Chat, the Send screens), or several
+/// Pick from the Address Book, full screen: one address (the Send screens), or several
 /// at once with ticks (New Group).
 struct AddressBookPickerSheet: View {
     private enum Mode {
@@ -794,7 +764,7 @@ struct AddressBookPickerSheet: View {
                             .foregroundColor(.secondary)
                         Text("No saved addresses")
                             .font(.headline)
-                        Text("Add addresses in Kaspa Hub > Address Book.")
+                        Text("Add addresses in Wallet > Address Book.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)

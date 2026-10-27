@@ -38,7 +38,7 @@ struct PortfolioTransactionsView<Header: View>: View {
     @State private var showAddChooser = false
     @State private var showImportExport = false
     @State private var showCsvImporter = false
-    /// Set for "Add Chatting Address": the address sheet imports this one straight away.
+    /// Set for "Add Main Address": the address sheet imports this one straight away.
     @State private var addAddressPreset: String?
     /// The transaction a long press is moving to another portfolio, while its sheet is up.
     @State private var movingTransaction: PortfolioTransaction?
@@ -521,11 +521,11 @@ struct PortfolioTransactionsView<Header: View>: View {
                 DispatchQueue.main.async { showAddAddressSheet = true }
             }
             // One tap for the address KaChat itself spends from: its buys and sells, and every
-            // network fee it paid (messages, handshakes, payments) for the Fees Spent card.
+            // network fee it paid for the Fees Spent card.
             if let chattingAddress = WalletManager.shared.currentWallet?.publicAddress {
                 ActionSheetRow(
-                    title: "Add Chatting Address",
-                    subtitle: "Your chatting address's buys and sells, and every network fee it has paid.",
+                    title: "Add Main Address",
+                    subtitle: "Your main address's buys and sells, and every network fee it has paid.",
                     systemImage: "bubble.left.and.bubble.right"
                 ) {
                     showAddChooser = false
@@ -668,7 +668,7 @@ private struct PortfolioCsvShareSheet: UIViewControllerRepresentable {
 /// stored (rows dedupe/group purely by `sourceAddress`).
 private struct AddPortfolioAddressSheet: View {
     @ObservedObject var viewModel: PortfolioViewModel
-    /// "Add Chatting Address": no field to fill - the import of this address starts as the
+    /// "Add Main Address": no field to fill - the import of this address starts as the
     /// sheet opens, and the sheet shows only its progress.
     var presetAddress: String? = nil
     let onCompletion: (Result<PortfolioAddressImporter.ImportResult, PortfolioAddressImporter.ImportError>) -> Void
@@ -764,7 +764,7 @@ private struct AddPortfolioAddressSheet: View {
                     }
                 }
             }
-            .navigationTitle(presetAddress == nil ? "Add Kaspa Address" : "Add Chatting Address")
+            .navigationTitle(presetAddress == nil ? "Add Kaspa Address" : "Add Main Address")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

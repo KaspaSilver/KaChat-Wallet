@@ -53,17 +53,6 @@ final class CacheManager: ObservableObject {
 
     private init() {}
 
-    /// Phone-Contacts photos KaChat cached before it stopped using the phone's Contacts
-    /// (2026-10-08). Nothing reads them any more; removed once, at launch.
-    nonisolated static func removeRetiredContactPhotos() {
-        let flag = "kachat_retired_contact_photos_removed_v1"
-        guard !UserDefaults.standard.bool(forKey: flag) else { return }
-        if let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            try? FileManager.default.removeItem(at: root.appendingPathComponent("ContactAvatars", isDirectory: true))
-        }
-        UserDefaults.standard.set(true, forKey: flag)
-    }
-
     // MARK: - Locations
 
     private var cachesRoot: URL? {

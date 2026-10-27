@@ -7,7 +7,10 @@ import CryptoKit
 import Security
 import P256K
 
-/// Manages push notification registration and indexer communication
+/// Registers this device with KaChat's push service for the wallet's two pushes: "Received KAS"
+/// on its own addresses (`watch_only_addresses`) and .kachat name events (`primary_address`),
+/// sent on the wallet's APNs topic. Every request is signed by the wallet key (see
+/// `buildPushAuth`); the chat fields the service also knows are always sent empty.
 @MainActor
 final class PushNotificationManager: ObservableObject {
     static let shared = PushNotificationManager()
@@ -18,10 +21,10 @@ final class PushNotificationManager: ObservableObject {
     @Published private(set) var permissionStatus: UNAuthorizationStatus = .notDetermined
     @Published private(set) var lastError: String?
 
-    /// Number of addresses being watched for push notifications
+    /// Number of own addresses being watched for "Received" pushes
     var watchedAddressesCount: Int? {
         guard isRegistered else { return nil }
-        return collectWatchedAddresses().count
+        return collectWatchOnlyAddresses().count
     }
 
     // MARK: - Private State
@@ -45,17 +48,11 @@ final class PushNotificationManager: ObservableObject {
     private let deviceAuthCounterDefaultsKey = "push_device_auth_counter"
 
     private var deviceToken: String?
-    /// The PushKit VoIP token, alongside the APNs one: the push service rings this device
-    /// through it (`/v1/push/ring`). Registered with the rest of the device record; nil until
-    /// PushKit hands one out, or after it invalidates it.
-    private(set) var voipToken: String?
     private var pendingRegistration = false
     private var registrationInFlight = false
     private var lastDeviceTokenHandledAt: Date?
     private var registrationContinuation: CheckedContinuation<Void, Error>?
     private var registrationTimeoutTask: Task<Void, Never>?
-    private var recentlyHandledPushes: [String: Date] = [:]
-    private var retryTasks: [String: Task<Void, Never>] = [:]
     private var updateWatchedInFlight = false
     private var updateWatchedPending = false
     private var updateWatchedTask: Task<Void, Never>?
@@ -65,8 +62,7 @@ final class PushNotificationManager: ObservableObject {
     private var pendingWatchedSignature: String?
     private var inFlightWatchedSignature: String?
     // Backoff retry for failed watched-set updates - without it, a dropped update left the
-    // indexer's group watch-list stale until an unrelated later trigger (the "some members
-    // never get notified for some senders" bug).
+    // service's watch list stale until an unrelated later trigger.
     private var watchedUpdateRetryTask: Task<Void, Never>?
     private var watchedUpdateRetryAttempt = 0
     private var walletBindingConflictFingerprint: String?
@@ -77,18 +73,12 @@ final class PushNotificationManager: ObservableObject {
     private let walletBindingConflictCooldown: TimeInterval = 15 * 60
     private let walletBindingConflictLogCooldown: TimeInterval = 60
     private var settingsObserver: NSObjectProtocol?
-    private var conversationsCancellable: AnyCancellable?
-    private var declinedContactsCancellable: AnyCancellable?
-    private var groupsCancellable: AnyCancellable?
-    private var groupMutedMembersCancellable: AnyCancellable?
-    private var groupSilentCancellable: AnyCancellable?
 
     // MARK: - Constants
 
     private let registrationEndpoint = "/v1/push/register"
     private let updateEndpoint = "/v1/push/update"
     private let unregisterEndpoint = "/v1/push/unregister"
-    private let ringEndpoint = "/v1/push/ring"
     private let challengeEndpoint = "/v1/push/challenge"
     private let pushAuthDomain = "kchat-push-auth:v1"
     private let pushDeviceAuthDomain = "kchat-push-device-auth:v1"
@@ -99,7 +89,6 @@ final class PushNotificationManager: ObservableObject {
     private init() {
         loadPersistedState()
         observeSettingsChanges()
-        observeConversationVisibilityChanges()
         Task {
             await checkPermissionStatus()
         }
@@ -109,11 +98,6 @@ final class PushNotificationManager: ObservableObject {
         if let settingsObserver {
             NotificationCenter.default.removeObserver(settingsObserver)
         }
-        conversationsCancellable?.cancel()
-        declinedContactsCancellable?.cancel()
-        groupsCancellable?.cancel()
-        groupMutedMembersCancellable?.cancel()
-        groupSilentCancellable?.cancel()
     }
 
     // MARK: - Public API
@@ -178,7 +162,14 @@ final class PushNotificationManager: ObservableObject {
     /// is published). Every push-service call is skipped then: a blank base would otherwise
     /// produce path-only requests that iOS rejects as "unsupported URL".
     private var hasPushService: Bool {
-        KasiaAPIClient.isUsableBaseURL(AppSettings.load().pushIndexerURL)
+        Self.isUsableBaseURL(AppSettings.load().pushIndexerURL)
+    }
+
+    static func isUsableBaseURL(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", url.host?.isEmpty == false else { return false }
+        return true
     }
 
     func refreshRegistrationIfNeeded() {
@@ -231,100 +222,7 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
-    /// Force re-registration with the indexer when push reliability appears degraded.
-    func forceReregister(reason: String) async {
-        let settings = AppSettings.load()
-        guard settings.notificationMode == .remotePush else { return }
-        guard permissionStatus == .authorized || permissionStatus == .provisional else {
-            AppLog.log("[Push] Skipping forced re-registration - permission not granted")
-            return
-        }
-        guard registrationContinuation == nil else {
-            AppLog.log("[Push] Skipping forced re-registration - explicit registration flow in progress")
-            return
-        }
-
-        if deviceToken == nil {
-            pendingRegistration = true
-            UIApplication.shared.registerForRemoteNotifications()
-            AppLog.log("[Push] Forced re-registration requested (%@), refreshing APNs token", reason)
-            return
-        }
-
-        if shouldDeferRegistrationForWalletBindingConflict() {
-            return
-        }
-
-        do {
-            try await registerWithIndexer()
-            AppLog.log("[Push] Forced re-registration succeeded (%@)", reason)
-        } catch {
-            lastError = error.localizedDescription
-            AppLog.log("[Push] Forced re-registration failed (%@): %@",
-                  reason,
-                  error.localizedDescription)
-        }
-    }
-
     /// Called from AppDelegate when APNs token received
-    /// PushKit handed out (or withdrew) the VoIP token. Persisted and pushed to the service
-    /// with the next device update - it is part of the watched signature, so the update goes
-    /// out as soon as the token changes.
-    func didUpdateVoIPToken(_ token: String?) {
-        guard token != voipToken else { return }
-        voipToken = token
-        saveVoipTokenToKeychain(token)
-        AppLog.log("[Push] VoIP token %@", token.map { "updated: \($0.prefix(8))..." } ?? "invalidated")
-        guard isRegistered else { return }
-        Task { await updateWatchedAddresses() }
-    }
-
-    /// Asks the service to ring `address`'s devices for a call this device is placing. The
-    /// request is signed like every other push call, which is how the service knows the
-    /// sender it puts in the push. `payloadHex` is the opening call message encrypted to the
-    /// contact, for the callee to decrypt on arrival (PUSH_EXTENSIONS.md §5).
-    func requestRing(to address: String, callId: String, video: Bool, kind: String, payloadHex: String) async throws {
-        guard let token = deviceToken else { throw PushError.noDeviceToken }
-        guard hasPushService else { throw PushError.noPushService }
-        let settings = AppSettings.load()
-        guard let url = URL(string: "\(settings.pushIndexerURL)\(ringEndpoint)") else {
-            throw PushError.invalidResponse
-        }
-        // The service checks a ring in its legacy shape (PUSH_EXTENSIONS.md §5): no
-        // watched_group_ids line, and the caller's own wallet address as primary_address - a
-        // ring signed like register never verified, so a sleeping phone was never woken.
-        let auth = try await buildPushAuth(
-            method: "POST",
-            path: ringEndpoint,
-            deviceToken: token,
-            watchedAddresses: [],
-            watchedGroupIds: [],
-            primaryAddress: WalletManager.shared.currentWallet?.publicAddress,
-            aliases: [],
-            includeWatchedGroupIds: false
-        )
-        let request = PushRingRequest(
-            deviceToken: token,
-            toAddress: address,
-            callId: callId,
-            video: video,
-            kind: kind,
-            payload: payloadHex,
-            timestampMs: UInt64(Date().timeIntervalSince1970 * 1000),
-            auth: auth
-        )
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONEncoder().encode(request)
-        urlRequest.timeoutInterval = 15
-        let (responseData, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else { throw PushError.invalidResponse }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw PushError.ringFailed(statusCode: httpResponse.statusCode, reason: parseIndexerError(from: responseData))
-        }
-    }
-
     func didRegisterForRemoteNotifications(deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         let previousToken = self.deviceToken
@@ -414,20 +312,12 @@ final class PushNotificationManager: ObservableObject {
         defer { registrationInFlight = false }
 
         let settings = AppSettings.load()
-        let watchedAddresses = collectWatchedAddresses()
-        // nil = transient keychain failure loading a group bag; register with what we have (the
-        // retry-capable watched-update path heals the group list afterwards).
-        let watchedGroupIds = collectWatchedGroupIds() ?? []
-        let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
         let primaryAddress = collectPrimaryAddress()
         let watchOnlyAddresses = collectWatchOnlyAddresses()
 
-        // Group ids alone are a valid registration - requiring a non-empty 1:1 list meant a user
-        // with groups but no push-eligible 1:1 chats never registered for group pushes at all.
-        // KaChat Wallet has neither: its own addresses (watch-only) and its main address
-        // (.kachat name events) are its registration.
-        guard hasPushSubscriptions(watchedAddresses: watchedAddresses, watchedGroupIds: watchedGroupIds,
-                                   watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) else {
+        // Its own addresses (watch-only) and its main address (.kachat name events) are the
+        // wallet's whole registration.
+        guard hasPushSubscriptions(watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) else {
             throw PushError.noWatchedAddresses
         }
 
@@ -435,28 +325,15 @@ final class PushNotificationManager: ObservableObject {
             let (statusCode, reason) = try await submitRegistrationRequest(
                 settings: settings,
                 token: token,
-                watchedAddresses: watchedAddresses,
-                watchedGroupIds: watchedGroupIds,
-                aliases: aliases,
                 primaryAddress: primaryAddress,
                 watchOnlyAddresses: watchOnlyAddresses
             )
             if statusCode == 200 {
-                applySuccessfulRegistration(
-                    watchedAddresses: watchedAddresses,
-                    watchedGroupIds: watchedGroupIds,
-                    aliases: aliases,
-                    primaryAddress: primaryAddress,
-                    watchOnlyAddresses: watchOnlyAddresses
-                )
+                applySuccessfulRegistration(primaryAddress: primaryAddress, watchOnlyAddresses: watchOnlyAddresses)
                 return
             }
             if isWalletBindingConflict(statusCode: statusCode, reason: reason), attempt == 0 {
-                let recovered = await attemptWalletBindingRecoveryUnregister(
-                    token: token,
-                    watchedAddresses: watchedAddresses,
-                    aliases: aliases
-                )
+                let recovered = await attemptWalletBindingRecoveryUnregister(token: token)
                 if recovered {
                     continue
                 }
@@ -471,9 +348,6 @@ final class PushNotificationManager: ObservableObject {
     private func submitRegistrationRequest(
         settings: AppSettings,
         token: String,
-        watchedAddresses: [String],
-        watchedGroupIds: [String],
-        aliases: [String],
         primaryAddress: String?,
         watchOnlyAddresses: [String]
     ) async throws -> (Int, String?) {
@@ -485,10 +359,7 @@ final class PushNotificationManager: ObservableObject {
             method: "POST",
             path: registrationEndpoint,
             deviceToken: token,
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
-            primaryAddress: primaryAddress,
-            aliases: aliases
+            primaryAddress: primaryAddress
         )
 
         #if targetEnvironment(macCatalyst)
@@ -497,25 +368,11 @@ final class PushNotificationManager: ObservableObject {
         let platform = "ios"
         #endif
 
-        let kinds = AppSettings.load()
         let request = PushRegistrationRequest(
             deviceToken: token,
             platform: platform,
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
-            watchedPublicChatChannels: collectWatchedPublicChatChannels(),
-            hiddenPublicChatSenders: collectHiddenPublicChatSenders(),
-            kapostsPubkey: collectKaPostsPubkey(),
-            kapostsNotifyLikes: kinds.kaPostsNotifyLikes,
-            kapostsNotifyDislikes: kinds.kaPostsNotifyDislikes,
-            kapostsNotifyComments: kinds.kaPostsNotifyComments,
-            kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
-            kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
-            kapostsWatchAuthors: collectKaPostsWatchAuthors(),
             primaryAddress: primaryAddress,
-            aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
-            voipToken: voipToken,
             watchOnlyAddresses: watchOnlyAddresses,
             apnsTopic: Self.apnsTopic,
             auth: auth
@@ -535,13 +392,7 @@ final class PushNotificationManager: ObservableObject {
         return (httpResponse.statusCode, reason)
     }
 
-    private func applySuccessfulRegistration(
-        watchedAddresses: [String],
-        watchedGroupIds: [String],
-        aliases: [String],
-        primaryAddress: String?,
-        watchOnlyAddresses: [String]
-    ) {
+    private func applySuccessfulRegistration(primaryAddress: String?, watchOnlyAddresses: [String]) {
         isRegistered = true
         lastError = nil
         persistRegistrationStatus(true)
@@ -549,30 +400,18 @@ final class PushNotificationManager: ObservableObject {
         UserDefaults.standard.set(ApnsEnvironment.current.rawValue, forKey: registeredApnsEnvironmentDefaultsKey)
         UserDefaults.standard.set(Self.currentBuildIdentifier, forKey: registeredBuildDefaultsKey)
         clearWalletBindingConflictCooldown()
-        lastWatchedSignature = buildWatchedSignature(
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
-            aliases: aliases,
-            primaryAddress: primaryAddress
-        )
+        lastWatchedSignature = buildWatchedSignature(primaryAddress: primaryAddress)
         lastWatchedUpdateSuccessAt = Date()
         pendingWatchedSignature = nil
         inFlightWatchedSignature = nil
 
-        SharedDataManager.syncContactsForExtension()
-
-        AppLog.log("[Push] Registered with indexer, watching %d own addresses (+%d chat)",
-                   watchOnlyAddresses.count, watchedAddresses.count)
+        AppLog.log("[Push] Registered with indexer, watching %d own addresses", watchOnlyAddresses.count)
         if registrationContinuation != nil {
             completeRegistration()
         }
     }
 
-    private func attemptWalletBindingRecoveryUnregister(
-        token: String,
-        watchedAddresses: [String],
-        aliases: [String]
-    ) async -> Bool {
+    private func attemptWalletBindingRecoveryUnregister(token: String) async -> Bool {
         let settings = AppSettings.load()
         guard hasPushService,
               let url = URL(string: "\(settings.pushIndexerURL)\(unregisterEndpoint)") else {
@@ -585,10 +424,7 @@ final class PushNotificationManager: ObservableObject {
                 method: "DELETE",
                 path: unregisterEndpoint,
                 deviceToken: token,
-                watchedAddresses: watchedAddresses,
-                watchedGroupIds: [],
-                primaryAddress: nil,
-                aliases: aliases
+                primaryAddress: nil
             )
         } catch {
             AppLog.log("[Push] Recovery unregister auth build failed: %@", error.localizedDescription)
@@ -660,7 +496,7 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
-    /// Update watched addresses (call when contacts change)
+    /// Update the watched addresses (call when the own address set or the switches change)
     func updateWatchedAddresses() async {
         guard deviceToken != nil else { return }
         guard hasPushService else { return }
@@ -741,26 +577,12 @@ final class PushNotificationManager: ObservableObject {
         }
 
         let settings = AppSettings.load()
-        let watchedAddresses = collectWatchedAddresses()
-        // nil = a group bag failed to load (transient keychain hiccup). Abort + retry rather than
-        // submit a truncated list - the indexer treats the update as a full replace, so a partial
-        // list silently DELETES the missing groups' subscriptions server-side.
-        guard let watchedGroupIds = collectWatchedGroupIds() else {
-            AppLog.log("[Push] Group bag read failed - skipping watched update to avoid truncating server list; will retry")
-            inFlightWatchedSignature = nil
-            scheduleWatchedUpdateRetry()
-            return
-        }
-        let aliases = collectAliases(forWatchedAddresses: watchedAddresses)
         let primaryAddress = collectPrimaryAddress()
         let watchOnlyAddresses = collectWatchOnlyAddresses()
-        // Only unregister when there is NOTHING left to watch. Group ids alone are a valid
-        // registration - unregistering whenever the 1:1 list was empty killed ALL group pushes for
-        // users with groups but no push-eligible 1:1 chats. So are KaChat Wallet's own addresses,
-        // and its main address alone (.kachat name events, with Address Activity off).
-        if !hasPushSubscriptions(watchedAddresses: watchedAddresses, watchedGroupIds: watchedGroupIds,
-                                 watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) {
-            AppLog.log("[Push] No eligible chats for push, unregistering device from indexer")
+        // Only unregister when there is NOTHING left to watch. The main address alone (.kachat
+        // name events, with Address Activity off) is a registration.
+        if !hasPushSubscriptions(watchOnlyAddresses: watchOnlyAddresses, primaryAddress: primaryAddress) {
+            AppLog.log("[Push] Nothing to watch, unregistering device from indexer")
             await unregister()
             lastWatchedSignature = ""
             lastWatchedUpdateSuccessAt = Date()
@@ -769,12 +591,7 @@ final class PushNotificationManager: ObservableObject {
             updateWatchedPending = false
             return
         }
-        let signature = buildWatchedSignature(
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
-            aliases: aliases,
-            primaryAddress: primaryAddress
-        )
+        let signature = buildWatchedSignature(primaryAddress: primaryAddress)
         inFlightWatchedSignature = signature
 
         let auth: PushAuthRequest
@@ -783,10 +600,7 @@ final class PushNotificationManager: ObservableObject {
                 method: "PUT",
                 path: updateEndpoint,
                 deviceToken: token,
-                watchedAddresses: watchedAddresses,
-                watchedGroupIds: watchedGroupIds,
-                primaryAddress: primaryAddress,
-                aliases: aliases
+                primaryAddress: primaryAddress
             )
         } catch {
             lastError = error.localizedDescription
@@ -796,24 +610,10 @@ final class PushNotificationManager: ObservableObject {
             return
         }
 
-        let kinds = AppSettings.load()
         let request = PushUpdateRequest(
             deviceToken: token,
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
-            watchedPublicChatChannels: collectWatchedPublicChatChannels(),
-            hiddenPublicChatSenders: collectHiddenPublicChatSenders(),
-            kapostsPubkey: collectKaPostsPubkey(),
-            kapostsNotifyLikes: kinds.kaPostsNotifyLikes,
-            kapostsNotifyDislikes: kinds.kaPostsNotifyDislikes,
-            kapostsNotifyComments: kinds.kaPostsNotifyComments,
-            kapostsNotifyReposts: kinds.kaPostsNotifyReposts,
-            kapostsNotifyFollows: kinds.kaPostsNotifyFollows,
-            kapostsWatchAuthors: collectKaPostsWatchAuthors(),
             primaryAddress: primaryAddress,
-            aliases: aliases,
             apnsEnvironment: ApnsEnvironment.current.rawValue,
-            voipToken: voipToken,
             watchOnlyAddresses: watchOnlyAddresses,
             apnsTopic: Self.apnsTopic,
             auth: auth
@@ -842,11 +642,7 @@ final class PushNotificationManager: ObservableObject {
             guard httpResponse.statusCode == 200 else {
                 let reason = parseIndexerError(from: responseData) ?? "unknown"
                 if isWalletBindingConflict(statusCode: httpResponse.statusCode, reason: reason) {
-                    let recovered = await attemptWalletBindingRecoveryUnregister(
-                        token: token,
-                        watchedAddresses: watchedAddresses,
-                        aliases: aliases
-                    )
+                    let recovered = await attemptWalletBindingRecoveryUnregister(token: token)
                     if recovered {
                         do {
                             try await registerWithIndexer()
@@ -880,17 +676,13 @@ final class PushNotificationManager: ObservableObject {
                 return
             }
 
-            // Sync contacts to shared container
-            SharedDataManager.syncContactsForExtension()
-
             lastWatchedSignature = signature
             lastWatchedUpdateSuccessAt = Date()
             // Success - reset the failure backoff.
             watchedUpdateRetryAttempt = 0
             watchedUpdateRetryTask?.cancel()
             watchedUpdateRetryTask = nil
-            AppLog.log("[Push] Updated watched addresses: %d own (+%d chat, +%d group ids)",
-                       watchOnlyAddresses.count, watchedAddresses.count, watchedGroupIds.count)
+            AppLog.log("[Push] Updated watched addresses: %d own", watchOnlyAddresses.count)
         } catch {
             AppLog.log("[Push] Error updating addresses: %@", error.localizedDescription)
             inFlightWatchedSignature = nil
@@ -927,36 +719,11 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
-    private func buildWatchedSignature(
-        watchedAddresses: [String]? = nil,
-        watchedGroupIds: [String]? = nil,
-        aliases: [String]? = nil,
-        primaryAddress: String? = nil
-    ) -> String {
-        let addrs = (watchedAddresses ?? collectWatchedAddresses()).sorted()
-        let groupIds = (watchedGroupIds ?? collectWatchedGroupIds() ?? []).sorted()
-        let aliasList = (aliases ?? collectAliases(forWatchedAddresses: addrs)).sorted()
+    /// What the service holds for this device: a change to any of it is worth an update.
+    private func buildWatchedSignature(primaryAddress: String? = nil) -> String {
         let primary = primaryAddress ?? collectPrimaryAddress() ?? ""
-        let publicChatChannels = collectWatchedPublicChatChannels()
-        let kapostsKey = collectKaPostsPubkey() ?? ""
-        let watchAuthors = collectKaPostsWatchAuthors().sorted().joined(separator: "+")
-        let hiddenPublicChat = collectHiddenPublicChatSenders()
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key):\($0.value.joined(separator: "+"))" }
-        let apnsEnvironment = ApnsEnvironment.current.rawValue
-        let voip = voipToken ?? ""
-        // The KaPosts switches and the silenced groups are part of what the service holds for
-        // this device, so a change to either is a change worth an update even when the forced
-        // re-registration behind the switch could not run (permission, wallet-binding cooldown).
-        let kinds = AppSettings.load()
-        let kaPostsKinds = [kinds.kaPostsNotifyLikes, kinds.kaPostsNotifyDislikes, kinds.kaPostsNotifyComments, kinds.kaPostsNotifyReposts, kinds.kaPostsNotifyFollows]
-            .map { $0 ? "1" : "0" }.joined()
-        let silentGroups = GroupChatService.shared.groupSilentNotifications.sorted().joined(separator: "+")
-        // KaChat Wallet's own addresses and app id: a new address or a switched notification
-        // changes what the service must watch.
         let watchOnly = collectWatchOnlyAddresses().joined(separator: "+")
-        let topic = Self.apnsTopic ?? ""
-        return (addrs + ["|"] + groupIds + ["|"] + aliasList + ["|", primary] + ["|"] + publicChatChannels + ["|"] + hiddenPublicChat + ["|", kapostsKey] + ["|", apnsEnvironment] + ["|", voip] + ["|", kaPostsKinds] + ["|", silentGroups] + ["|", watchAuthors] + ["|", watchOnly] + ["|", topic]).joined(separator: ",")
+        return [primary, ApnsEnvironment.current.rawValue, watchOnly, Self.apnsTopic ?? ""].joined(separator: "|")
     }
 
     /// Unregister device (call on logout/wallet delete)
@@ -1038,10 +805,7 @@ final class PushNotificationManager: ObservableObject {
                     method: "DELETE",
                     path: unregisterEndpoint,
                     deviceToken: token,
-                    watchedAddresses: [],
-                    watchedGroupIds: [],
-                    primaryAddress: nil,
-                    aliases: []
+                    primaryAddress: nil
                 )
             } catch {
                 // Best-effort fallback for mixed/legacy backend mode.
@@ -1086,250 +850,6 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
-    /// Process pending messages stored by notification extension
-    func processPendingMessages() async {
-        // Decrypted messages an older notification extension stored in plain text (it no longer
-        // does - IOS-051): processed once, then only those entries removed (IOS-052).
-        let storedMessages = SharedDataManager.getStoredMessages()
-        if !storedMessages.isEmpty {
-            AppLog.log("[Push] Processing %d messages from extension", storedMessages.count)
-
-            for msg in storedMessages {
-                // Add to ChatService if not already present
-                if let txId = msg["txId"] as? String,
-                   let sender = msg["sender"] as? String,
-                   let content = msg["content"] as? String,
-                   let timestamp = msg["timestamp"] as? Int64 {
-                    ChatService.shared.recordRemotePushDelivery(
-                        txId: txId,
-                        sender: sender,
-                        messageType: "contextual"
-                    )
-                    await ChatService.shared.addMessageFromPush(
-                        txId: txId,
-                        sender: sender,
-                        content: content,
-                        timestamp: timestamp
-                    )
-                }
-            }
-
-            SharedDataManager.removeStoredMessages(txIds: Set(storedMessages.compactMap { $0["txId"] as? String }))
-        }
-
-        // Get pending messages that need fetching (large payloads, and every 1:1 message the
-        // extension decrypted for its banner)
-        let pendingMessages = SharedDataManager.getPendingMessages()
-        if !pendingMessages.isEmpty {
-            AppLog.log("[Push] Fetching %d pending messages", pendingMessages.count)
-
-            // Group pushes (`NotificationService.handleGroupPush`) always add a pending entry
-            // with `sender: "group"` regardless of whether the NSE already decrypted and showed
-            // it, since there's no single-txId REST fetch for a group message the way 1:1 has
-            // `fetchMessageByTxId`. Routing them through that 1:1-only call below with a literal
-            // "group" sender always silently fails - the message never lands in the group
-            // thread even though its notification banner showed correctly. Group catch-up sync
-            // (cursor-based, already run separately every app-active) is the real mechanism that
-            // persists these, so just make sure it runs and drop these from the retry queue
-            // rather than repeatedly failing the same bogus 1:1 fetch.
-            let hasGroupPending = pendingMessages.contains { $0.type == "group_message" || $0.type == "group_control" }
-            if hasGroupPending {
-                await GroupChatService.shared.performCatchUpSync()
-            }
-
-            var failed: [SharedPendingMessage] = []
-            for pending in pendingMessages {
-                if pending.type == "group_message" || pending.type == "group_control" {
-                    continue
-                }
-                ChatService.shared.recordRemotePushDelivery(
-                    txId: pending.txId,
-                    sender: pending.sender,
-                    messageType: pending.type
-                )
-                let fetched: Bool
-                if pending.type == "payment" {
-                    fetched = await ChatService.shared.fetchPaymentByTxId(
-                        pending.txId,
-                        sender: pending.sender,
-                        amount: nil,
-                        timestamp: pending.timestamp
-                    )
-                } else {
-                    fetched = await ChatService.shared.fetchMessageByTxId(pending.txId, sender: pending.sender)
-                }
-                if !fetched {
-                    failed.append(pending)
-                }
-            }
-
-            SharedDataManager.setPendingMessages(failed)
-        }
-    }
-
-    /// Handle an incoming remote push payload and update chats immediately.
-    /// Serializes group catch-up syncs triggered by pushes: only one runs at a time, and if more
-    /// group pushes arrive while one is in flight, exactly one more sync runs afterward (so the later
-    /// messages are still fetched) instead of stacking N overlapping full syncs.
-    private var groupCatchUpInFlight = false
-    private var groupCatchUpNeedsRerun = false
-
-    /// One catch-up at a time; a request during one queues exactly one more.
-    func runGroupCatchUp() async {
-        if groupCatchUpInFlight {
-            groupCatchUpNeedsRerun = true
-            return
-        }
-        groupCatchUpInFlight = true
-        repeat {
-            groupCatchUpNeedsRerun = false
-            await GroupChatService.shared.performCatchUpSync()
-        } while groupCatchUpNeedsRerun
-        groupCatchUpInFlight = false
-    }
-
-    func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> Bool {
-        // KaChat Wallet has no chats: its pushes ("Received", .kachat name events) are plain
-        // banners iOS shows by itself. Everything below turns a push into a chat message, so
-        // a push - shown, tapped or delivered in the background - never reaches it.
-        guard ChatService.chatsEnabled else { return false }
-        let settings = AppSettings.load()
-        guard settings.notificationMode == .remotePush else { return false }
-
-        guard let txId = userInfo["tx_id"] as? String,
-              let sender = userInfo["sender"] as? String,
-              let messageType = userInfo["type"] as? String else {
-            return false
-        }
-
-        ChatService.shared.recordRemotePushDelivery(
-            txId: txId,
-            sender: sender,
-            messageType: messageType
-        )
-
-        pruneRecentlyHandledPushes()
-        if let lastHandled = recentlyHandledPushes[txId], Date().timeIntervalSince(lastHandled) < 60 {
-            AppLog.log("[Push] Remote push already handled recently: %@", txId)
-            return true
-        }
-
-        let timestamp = extractTimestamp(userInfo: userInfo)
-        let payload = userInfo["payload"] as? String
-        let amount = extractAmount(userInfo: userInfo)
-
-        if messageType == "payment" {
-            if let ourAddress = WalletManager.shared.currentWallet?.publicAddress,
-               sender == ourAddress,
-               await ChatService.shared.hasLocalMessage(txId: txId) {
-                AppLog.log("[Push] Outgoing payment already in local messages: %@", txId)
-                return true
-            }
-
-            if await ChatService.shared.addPaymentFromPush(
-                txId: txId,
-                sender: sender,
-                amount: amount,
-                payload: payload,
-                timestamp: timestamp
-            ) {
-                AppLog.log("[Push] Remote payment handled: %@", txId)
-                recentlyHandledPushes[txId] = Date()
-                if let task = retryTasks.removeValue(forKey: txId) {
-                    task.cancel()
-                }
-                SharedDataManager.removePendingMessage(txId: txId)
-                return true
-            }
-
-            AppLog.log("[Push] Remote payment handled via fetch: %@", txId)
-            let fetched = await ChatService.shared.fetchPaymentByTxId(
-                txId,
-                sender: sender,
-                amount: amount,
-                timestamp: timestamp
-            )
-            if !fetched {
-                SharedDataManager.addPendingMessage(txId: txId, sender: sender, type: messageType)
-                AppLog.log("[Push] Remote payment fetch failed, queued for retry: %@", txId)
-                scheduleRetryFetchIfActive(txId: txId, sender: sender, type: messageType)
-                return false
-            }
-            recentlyHandledPushes[txId] = Date()
-            if let task = retryTasks.removeValue(forKey: txId) {
-                task.cancel()
-            }
-            SharedDataManager.removePendingMessage(txId: txId)
-            return true
-        }
-
-        if let ourAddress = WalletManager.shared.currentWallet?.publicAddress,
-           sender == ourAddress {
-            if await ChatService.shared.hasLocalMessage(txId: txId) {
-                AppLog.log("[Push] Outgoing push already in local messages: %@", txId)
-                return true
-            }
-            return await ChatService.shared.addOutgoingMessageFromPush(
-                txId: txId,
-                sender: sender,
-                payload: payload,
-                timestamp: timestamp
-            )
-        }
-
-        if messageType == "group_message" || messageType == "group_control" {
-            // A group push has no single-txId REST fetch - the 1:1 `fetchMessageByTxId` below always
-            // fails for a group txId, so the message would sit unloaded (and un-badged) until the next
-            // app-active catch-up. Run the cursor-based group catch-up now so the message lands in the
-            // thread promptly and drives the unread/badge count. Coalesced so a burst of group pushes
-            // doesn't stack overlapping full syncs.
-            AppLog.log("[Push] Group push -> catch-up sync: %@", txId)
-            await runGroupCatchUp()
-            recentlyHandledPushes[txId] = Date()
-            if let task = retryTasks.removeValue(forKey: txId) { task.cancel() }
-            SharedDataManager.removePendingMessage(txId: txId)
-            return true
-        }
-
-        if messageType == "contextual" {
-            if let payload {
-                AppLog.log("[Push] Remote push payload len=%d tx=%@", payload.count, txId)
-                if let content = decryptContextualPayload(payload) {
-                    AppLog.log("[Push] Remote push handled via decrypt: %@", txId)
-                    recentlyHandledPushes[txId] = Date()
-                    if let task = retryTasks.removeValue(forKey: txId) {
-                        task.cancel()
-                    }
-                    SharedDataManager.removePendingMessage(txId: txId)
-                    await ChatService.shared.addMessageFromPush(
-                        txId: txId,
-                        sender: sender,
-                        content: content,
-                        timestamp: timestamp
-                    )
-                    return true
-                }
-            } else {
-                AppLog.log("[Push] Remote push missing payload: %@", txId)
-            }
-        }
-
-        AppLog.log("[Push] Remote push handled via fetch: %@", txId)
-        let fetched = await ChatService.shared.fetchMessageByTxId(txId, sender: sender)
-        if !fetched {
-            SharedDataManager.addPendingMessage(txId: txId, sender: sender, type: messageType)
-            AppLog.log("[Push] Remote push fetch failed, queued for retry: %@", txId)
-            scheduleRetryFetchIfActive(txId: txId, sender: sender, type: messageType)
-            return false
-        }
-        recentlyHandledPushes[txId] = Date()
-        if let task = retryTasks.removeValue(forKey: txId) {
-            task.cancel()
-        }
-        SharedDataManager.removePendingMessage(txId: txId)
-        return true
-    }
-
     // MARK: - Private Helpers
 
     private func loadPersistedState() {
@@ -1345,7 +865,6 @@ final class PushNotificationManager: ObservableObject {
                 defaults.removeObject(forKey: tokenDefaultsKey)
             }
         }
-        voipToken = loadVoipTokenFromKeychain()
         let storedRegistered = UserDefaults.standard.bool(forKey: registeredDefaultsKey)
         isRegistered = storedRegistered && deviceToken != nil
 
@@ -1400,7 +919,6 @@ final class PushNotificationManager: ObservableObject {
 
     private static let keychainService = "com.kachat.wallet"
     private static let keychainAccount = "push_device_token"
-    private static let voipKeychainAccount = "push_voip_token"
     private static let deviceAuthKeychainAccount = "push_device_auth_private_key"
 
     private func saveTokenToKeychain(_ token: String) {
@@ -1424,35 +942,6 @@ final class PushNotificationManager: ObservableObject {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
             kSecAttrAccount as String: Self.keychainAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func saveVoipTokenToKeychain(_ token: String?) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.voipKeychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard let token, let data = token.data(using: .utf8) else { return }
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        addQuery[kSecAttrSynchronizable as String] = kCFBooleanFalse!
-        SecItemAdd(addQuery as CFDictionary, nil)
-    }
-
-    private func loadVoipTokenFromKeychain() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.voipKeychainAccount,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -1523,157 +1012,34 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
-    private func observeConversationVisibilityChanges() {
-        conversationsCancellable = ChatService.shared.$conversations
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        declinedContactsCancellable = ChatService.shared.$declinedContacts
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        groupsCancellable = GroupChatService.shared.$groups
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        // Muting/unmuting a member doesn't change `$groups` itself, so it needs its own
-        // subscription to actually refresh which blinded ids get watched (see
-        // `collectWatchedGroupIds`'s muted-member exclusion).
-        groupMutedMembersCancellable = GroupChatService.shared.$groupMutedMembers
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-
-        // Silencing a group takes it OFF the server's watch list (see `collectWatchedGroupIds`),
-        // so the toggle has to reach the service the moment it flips.
-        groupSilentCancellable = GroupChatService.shared.$groupSilentNotifications
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let settings = AppSettings.load()
-                guard settings.notificationMode == .remotePush else { return }
-                Task { await self.updateWatchedAddresses() }
-            }
-    }
-
-    /// Indexer-tracked public chat channels (#kaspa/#kachat-bugs) whose bell is on - the push
-    /// service sends public chat-room pushes for these while the app is closed. Bell off =
-    /// channel excluded = no push.
-    private func collectWatchedPublicChatChannels() -> [String] {
-        // KaChat Wallet has no Public Chats: never ask for room pushes (PUSH_SERVICE.md).
-        []
-    }
-
-    /// Per-room hidden senders for the watched (indexed) channels - the push service must not
-    /// send pushes from these senders to this device. Legacy global hides apply to every
-    /// watched channel.
-    private func collectHiddenPublicChatSenders() -> [String: [String]] {
-        let hidden = PublicChatService.shared.hiddenSendersByChannel()
-        var result: [String: [String]] = [:]
-        for channel in collectWatchedPublicChatChannels() {
-            let combined = hidden.global.union(hidden.perChannel[channel] ?? [])
-            if !combined.isEmpty {
-                result[channel] = combined.sorted()
-            }
-        }
-        return result
-    }
-
-    /// The K (KaPosts) identity KaChat registers for "actions on your content" pushes.
-    private func collectKaPostsPubkey() -> String? {
-        // KaChat Wallet has no KaPosts: never ask for KaPosts pushes (PUSH_SERVICE.md).
-        nil
-    }
-
-    /// The authors this account asked to hear about when they post (KaPosts' bell). Empty in
-    /// Simple Mode, like the KaPosts identity itself.
-    private func collectKaPostsWatchAuthors() -> [String] {
-        guard collectKaPostsPubkey() != nil else { return [] }
-        return KaPostsWatchStore.shared.watchedPubkeys
-    }
-
-    /// KaChat Wallet's own addresses for "Received" pushes (see
+    /// The wallet's own addresses for "Received" pushes (see
     /// `AddressActivityNotifier.pushWatchOnlyAddresses`).
     private func collectWatchOnlyAddresses() -> [String] {
         AddressActivityNotifier.shared.pushWatchOnlyAddresses()
     }
 
     /// The APNs topic this build's device token belongs to - its bundle id. Sent at register and
-    /// update so a push service shared by several apps (KaChat, KaChat Wallet, KaPosts...) sends
-    /// with the right `apns-topic`; one that ignores it uses its single configured topic, and
-    /// Apple rejects the wallet's pushes with DeviceTokenNotForTopic (PUSH_SERVICE.md).
+    /// update so a push service shared by several apps (KaChat, KaChat Wallet, ...) sends
+    /// with the right `apns-topic` (PUSH_SERVICE.md).
     static let apnsTopic: String? = Bundle.main.bundleIdentifier
-
-    private func collectWatchedAddresses() -> [String] {
-        // KaChat Wallet has no chats: never ask for chat pushes, even for a conversation KaChat's
-        // code created in the background (PUSH_SERVICE.md).
-        []
-    }
-
-    /// The blinded group ids KaChat watches for group pushes. Nil meant a group key failed to load.
-    private func collectWatchedGroupIds() -> [String]? {
-        // KaChat Wallet has no group chats: never ask for group pushes (PUSH_SERVICE.md).
-        []
-    }
-
-    private func collectAliases(forWatchedAddresses watchedAddresses: [String]? = nil) -> [String] {
-        let addresses = Set((watchedAddresses ?? collectWatchedAddresses()).map { $0.lowercased() })
-        let aliases = ChatService.shared.knownIncomingAliases(forAddresses: addresses)
-        let normalized = aliases
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return Array(Set(normalized))
-    }
 
     private func collectPrimaryAddress() -> String? {
         WalletManager.shared.currentWallet?.publicAddress
     }
 
-    /// Whether this device has anything to register for. KaChat Wallet: its main address alone
-    /// is enough - .kachat name events go to `primary_address` whether or not Address Activity
-    /// (the watch-only list) is on, so switching that off must not unregister the device.
-    private func hasPushSubscriptions(
-        watchedAddresses: [String]? = nil,
-        watchedGroupIds: [String]? = nil,
-        watchOnlyAddresses: [String]? = nil,
-        primaryAddress: String? = nil
-    ) -> Bool {
-        if !(watchedAddresses ?? collectWatchedAddresses()).isEmpty { return true }
-        if !(watchedGroupIds ?? collectWatchedGroupIds() ?? []).isEmpty { return true }
+    /// Whether this device has anything to register for. The main address alone is enough -
+    /// .kachat name events go to `primary_address` whether or not Address Activity (the
+    /// watch-only list) is on, so switching that off must not unregister the device.
+    private func hasPushSubscriptions(watchOnlyAddresses: [String]? = nil, primaryAddress: String? = nil) -> Bool {
         if !(watchOnlyAddresses ?? collectWatchOnlyAddresses()).isEmpty { return true }
-        return !ChatService.chatsEnabled && (primaryAddress ?? collectPrimaryAddress()) != nil
+        return (primaryAddress ?? collectPrimaryAddress()) != nil
     }
 
     private func buildPushAuth(
         method: String,
         path: String,
         deviceToken: String,
-        watchedAddresses: [String],
-        watchedGroupIds: [String],
-        primaryAddress: String?,
-        aliases: [String],
-        /// false only for a request the service verifies without group ids (the ring): its
-        /// preimage then has no watched_group_ids_hash line.
-        includeWatchedGroupIds: Bool = true
+        primaryAddress: String?
     ) async throws -> PushAuthRequest {
         guard let wallet = WalletManager.shared.currentWallet else {
             throw PushError.authFailed(reason: "No active wallet")
@@ -1710,15 +1076,11 @@ final class PushNotificationManager: ObservableObject {
             method: method,
             path: path,
             deviceToken: normalizedDeviceToken,
-            watchedAddresses: watchedAddresses,
-            watchedGroupIds: watchedGroupIds,
             primaryAddress: normalizedPrimaryAddress,
-            aliases: aliases,
             walletPubkey: walletPubkey,
             walletAddress: walletAddress,
             timestampMs: timestampMs,
-            expiresAtMs: challenge.expiresAtMs,
-            includeWatchedGroupIds: includeWatchedGroupIds
+            expiresAtMs: challenge.expiresAtMs
         )
 
         var signingMaterial = privateKey
@@ -1807,47 +1169,36 @@ final class PushNotificationManager: ObservableObject {
         }
     }
 
+    /// The signed preimage the service checks. The chat fields (watched addresses, group ids,
+    /// aliases) are part of it and are always empty here: their hashes are of the empty list.
     private func buildAuthPreimage(
         nonce: String,
         method: String,
         path: String,
         deviceToken: String,
-        watchedAddresses: [String],
-        watchedGroupIds: [String],
         primaryAddress: String,
-        aliases: [String],
         walletPubkey: String,
         walletAddress: String,
         timestampMs: UInt64,
-        expiresAtMs: UInt64,
-        includeWatchedGroupIds: Bool = true
+        expiresAtMs: UInt64
     ) -> String {
-        let watchedHash = sha256Hex(canonicalizeWatchedAddressesForAuth(watchedAddresses).joined(separator: "\n"))
-        let watchedGroupIdsHash = sha256Hex(canonicalizeWatchedGroupIdsForAuth(watchedGroupIds).joined(separator: "\n"))
-        let aliasesHash = sha256Hex(canonicalizeAliasesForAuth(aliases).joined(separator: "\n"))
+        let emptyListHash = sha256Hex("")
         let deviceTokenHash = sha256Hex(deviceToken)
-
-        var lines: [String] = [
+        return [
             "domain=\(pushAuthDomain)",
             "nonce=\(nonce.trimmingCharacters(in: .whitespacesAndNewlines))",
             "method=\(method)",
             "path=\(path)",
             "device_token_hash=\(deviceTokenHash)",
-            "watched_addresses_hash=\(watchedHash)"
-        ]
-        // the ring is verified without group ids, so its preimage has no such line (XP-010)
-        if includeWatchedGroupIds {
-            lines.append("watched_group_ids_hash=\(watchedGroupIdsHash)")
-        }
-        lines += [
+            "watched_addresses_hash=\(emptyListHash)",
+            "watched_group_ids_hash=\(emptyListHash)",
             "primary_address=\(primaryAddress)",
-            "aliases_hash=\(aliasesHash)",
+            "aliases_hash=\(emptyListHash)",
             "wallet_pubkey=\(walletPubkey)",
             "wallet_address=\(walletAddress)",
             "timestamp_ms=\(timestampMs)",
             "expires_at_ms=\(expiresAtMs)"
-        ]
-        return lines.joined(separator: "\n")
+        ].joined(separator: "\n")
     }
 
     private struct DeviceKeyMaterial {
@@ -1955,43 +1306,6 @@ final class PushNotificationManager: ObservableObject {
             throw PushError.authFailed(reason: "Invalid device token length")
         }
         return cleaned
-    }
-
-    private func canonicalizeWatchedAddressesForAuth(_ addresses: [String]) -> [String] {
-        var set = Set<String>()
-        for address in addresses {
-            let normalized = address
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            if !normalized.isEmpty {
-                set.insert(normalized)
-            }
-        }
-        return set.sorted()
-    }
-
-    private func canonicalizeWatchedGroupIdsForAuth(_ groupIds: [String]) -> [String] {
-        var set = Set<String>()
-        for groupId in groupIds {
-            let normalized = groupId
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            if !normalized.isEmpty {
-                set.insert(normalized)
-            }
-        }
-        return set.sorted()
-    }
-
-    private func canonicalizeAliasesForAuth(_ aliases: [String]) -> [String] {
-        var set = Set<String>()
-        for alias in aliases {
-            let normalized = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !normalized.isEmpty {
-                set.insert(normalized)
-            }
-        }
-        return set.sorted()
     }
 
     private func canonicalAddressForAuth(_ address: String?, network: NetworkType) -> String? {
@@ -2105,138 +1419,6 @@ final class PushNotificationManager: ObservableObject {
         return nil
     }
 
-    private func decryptContextualPayload(_ payload: String) -> String? {
-        guard let privateKey = try? KeychainService.shared.loadPrivateKey() else {
-            AppLog.log("[Push] Decrypt failed: missing private key")
-            return nil
-        }
-
-        // A first-contact `dm` message reads as `comm` (ContextualPayloadFormat).
-        if let payloadString = decodePayloadString(from: payload).map(ContextualPayloadFormat.normalized),
-           (payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:")) {
-            let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-            guard parts.count >= 5 else { return nil }
-            let base64String = String(parts[4])
-            guard let encryptedData = Data(base64Encoded: base64String) else { return nil }
-            return decryptEncryptedBytes(encryptedData, privateKey: privateKey)
-        }
-
-        if let encryptedData = Data(base64Encoded: payload) {
-            if let decrypted = decryptEncryptedBytes(encryptedData, privateKey: privateKey) {
-                return decrypted
-            }
-
-            if let utf8 = String(data: encryptedData, encoding: .utf8) {
-                if let hexData = Data(hexString: utf8) {
-                    return decryptEncryptedBytes(hexData, privateKey: privateKey)
-                }
-                if let payloadString = decodePayloadString(from: utf8).map(ContextualPayloadFormat.normalized),
-                   (payloadString.hasPrefix("kchat:1:comm:") || payloadString.hasPrefix("ciph_msg:1:comm:")) {
-                    let parts = payloadString.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-                    if parts.count >= 5,
-                       let nestedEncrypted = Data(base64Encoded: String(parts[4])) {
-                        return decryptEncryptedBytes(nestedEncrypted, privateKey: privateKey)
-                    }
-                }
-            }
-        }
-
-        if let encryptedData = Data(hexString: payload) {
-            return decryptEncryptedBytes(encryptedData, privateKey: privateKey)
-        }
-
-        return nil
-    }
-
-    private func decodePayloadString(from payload: String) -> String? {
-        if let payloadData = Data(hexString: payload),
-           let payloadString = String(data: payloadData, encoding: .utf8) {
-            return payloadString
-        }
-        if payload.hasPrefix("kchat:") || payload.hasPrefix("ciph_msg:") {
-            return payload
-        }
-        return nil
-    }
-
-    private func decryptEncryptedBytes(_ encryptedData: Data, privateKey: Data) -> String? {
-        guard let encrypted = KasiaCipher.EncryptedMessage(fromBytes: encryptedData) else {
-            AppLog.log("[Push] Decrypt failed: invalid encrypted message len=%d", encryptedData.count)
-            return nil
-        }
-        do {
-            return try KasiaCipher.decrypt(encrypted, privateKey: privateKey)
-        } catch {
-            AppLog.log("[Push] Decrypt failed: %@", error.localizedDescription)
-            return nil
-        }
-    }
-
-    private func extractTimestamp(userInfo: [AnyHashable: Any]) -> Int64 {
-        if let timestamp = userInfo["timestamp"] as? Int64 {
-            return timestamp
-        }
-        if let timestamp = userInfo["timestamp"] as? NSNumber {
-            return timestamp.int64Value
-        }
-        return Int64(Date().timeIntervalSince1970 * 1000)
-    }
-
-    private func extractAmount(userInfo: [AnyHashable: Any]) -> UInt64? {
-        if let amount = userInfo["amount"] as? UInt64 {
-            return amount
-        }
-        if let amount = userInfo["amount"] as? Int {
-            return UInt64(amount)
-        }
-        if let amount = userInfo["amount"] as? NSNumber {
-            return amount.uint64Value
-        }
-        if let amount = userInfo["amount"] as? String, let value = UInt64(amount) {
-            return value
-        }
-        return nil
-    }
-
-    private func pruneRecentlyHandledPushes() {
-        let cutoff = Date().addingTimeInterval(-120)
-        recentlyHandledPushes = recentlyHandledPushes.filter { $0.value >= cutoff }
-    }
-
-    private func scheduleRetryFetchIfActive(txId: String, sender: String, type: String?) {
-        guard UIApplication.shared.applicationState == .active else { return }
-        if retryTasks[txId] != nil {
-            return
-        }
-
-        retryTasks[txId] = Task { [weak self] in
-            let delays: [UInt64] = [5, 15, 30]
-            for seconds in delays {
-                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                let fetched: Bool
-                if type == "payment" {
-                    fetched = await ChatService.shared.fetchPaymentByTxId(
-                        txId,
-                        sender: sender,
-                        amount: nil,
-                        timestamp: Int64(Date().timeIntervalSince1970 * 1000)
-                    )
-                } else {
-                    fetched = await ChatService.shared.fetchMessageByTxId(txId, sender: sender)
-                }
-                if fetched {
-                    SharedDataManager.removePendingMessage(txId: txId)
-                    await MainActor.run {
-                        self?.recentlyHandledPushes[txId] = Date()
-                    }
-                    break
-                }
-            }
-            await MainActor.run {
-                self?.retryTasks[txId] = nil
-            }
-        }
-    }
 }
 
 // MARK: - APNs Environment
@@ -2301,35 +1483,15 @@ enum ApnsEnvironment: String {
 
 // MARK: - Request Models
 
-struct PushRegistrationRequest: Codable {
+/// `POST /v1/push/register`. `watched_addresses` (the service requires it) and
+/// `watched_group_ids` are KaChat's chat fields, always empty here.
+struct PushRegistrationRequest: Encodable {
     let deviceToken: String
     let platform: String
-    let watchedAddresses: [String]
-    let watchedGroupIds: [String]
-    let watchedPublicChatChannels: [String]
-    let hiddenPublicChatSenders: [String: [String]]
-    let kapostsPubkey: String?
-    /// The reader's per-kind KaPosts switches, so the server can skip a push at the source
-    /// (PUSH_EXTENSIONS.md §3). KaPosts pushes are plain alerts with no mutable-content, so the
-    /// notification service extension never runs for them and cannot filter on the device;
-    /// registering the kinds is the only way a switched-off kind stops arriving in the background.
-    /// Mentions are deliberately not switchable.
-    let kapostsNotifyLikes: Bool
-    let kapostsNotifyDislikes: Bool
-    let kapostsNotifyComments: Bool
-    let kapostsNotifyReposts: Bool
-    let kapostsNotifyFollows: Bool
-    /// Authors whose new posts this device wants a push for - the bell beside Follow
-    /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
-    let kapostsWatchAuthors: [String]
     let primaryAddress: String?
-    let aliases: [String]
     /// "development" | "production" - which APNs endpoint this device's token is valid for.
     let apnsEnvironment: String
-    /// PushKit VoIP token (hex), for ringing this device through `/v1/push/ring`. Same APNs
-    /// environment as `deviceToken`. Missing/null = this device cannot be rung.
-    let voipToken: String?
-    /// KaChat Wallet: own addresses to push "Received" for (server "Address Activity").
+    /// Own addresses to push "Received" for (server "Address Activity").
     let watchOnlyAddresses: [String]
     /// This build's bundle id, the APNs topic its token is valid for.
     let apnsTopic: String?
@@ -2340,50 +1502,33 @@ struct PushRegistrationRequest: Codable {
         case platform
         case watchedAddresses = "watched_addresses"
         case watchedGroupIds = "watched_group_ids"
-        case watchedPublicChatChannels = "watched_broadcast_channels"
-        case hiddenPublicChatSenders = "hidden_broadcast_senders"
-        case kapostsPubkey = "kaposts_pubkey"
-        case kapostsNotifyLikes = "kaposts_notify_likes"
-        case kapostsNotifyDislikes = "kaposts_notify_dislikes"
-        case kapostsNotifyComments = "kaposts_notify_comments"
-        case kapostsNotifyReposts = "kaposts_notify_reposts"
-        case kapostsNotifyFollows = "kaposts_notify_follows"
-        case kapostsWatchAuthors = "kaposts_watch_authors"
         case primaryAddress = "primary_address"
-        case aliases
         case apnsEnvironment = "apns_environment"
-        case voipToken = "voip_token"
         case watchOnlyAddresses = "watch_only_addresses"
         case apnsTopic = "apns_topic"
         case auth
     }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(deviceToken, forKey: .deviceToken)
+        try container.encode(platform, forKey: .platform)
+        try container.encode([String](), forKey: .watchedAddresses)
+        try container.encode([String](), forKey: .watchedGroupIds)
+        try container.encodeIfPresent(primaryAddress, forKey: .primaryAddress)
+        try container.encode(apnsEnvironment, forKey: .apnsEnvironment)
+        try container.encode(watchOnlyAddresses, forKey: .watchOnlyAddresses)
+        try container.encodeIfPresent(apnsTopic, forKey: .apnsTopic)
+        try container.encodeIfPresent(auth, forKey: .auth)
+    }
 }
 
-struct PushUpdateRequest: Codable {
+/// `PUT /v1/push/update`: a full replace of what `PushRegistrationRequest` registered.
+struct PushUpdateRequest: Encodable {
     let deviceToken: String
-    let watchedAddresses: [String]
-    let watchedGroupIds: [String]
-    let watchedPublicChatChannels: [String]
-    let hiddenPublicChatSenders: [String: [String]]
-    let kapostsPubkey: String?
-    /// See PushRegistrationRequest: the same five switches, kept current on every update.
-    let kapostsNotifyLikes: Bool
-    let kapostsNotifyDislikes: Bool
-    let kapostsNotifyComments: Bool
-    let kapostsNotifyReposts: Bool
-    let kapostsNotifyFollows: Bool
-    /// Authors whose new posts this device wants a push for - the bell beside Follow
-    /// (PUSH_EXTENSIONS.md §3a). Pubkeys, 66-hex compressed.
-    let kapostsWatchAuthors: [String]
     let primaryAddress: String?
-    let aliases: [String]
-    /// "development" | "production" - which APNs endpoint this device's token is valid for.
     let apnsEnvironment: String
-    /// See PushRegistrationRequest.
-    let voipToken: String?
-    /// KaChat Wallet: own addresses to push "Received" for (server "Address Activity").
     let watchOnlyAddresses: [String]
-    /// This build's bundle id, the APNs topic its token is valid for.
     let apnsTopic: String?
     let auth: PushAuthRequest?
 
@@ -2391,48 +1536,23 @@ struct PushUpdateRequest: Codable {
         case deviceToken = "device_token"
         case watchedAddresses = "watched_addresses"
         case watchedGroupIds = "watched_group_ids"
-        case watchedPublicChatChannels = "watched_broadcast_channels"
-        case hiddenPublicChatSenders = "hidden_broadcast_senders"
-        case kapostsPubkey = "kaposts_pubkey"
-        case kapostsNotifyLikes = "kaposts_notify_likes"
-        case kapostsNotifyDislikes = "kaposts_notify_dislikes"
-        case kapostsNotifyComments = "kaposts_notify_comments"
-        case kapostsNotifyReposts = "kaposts_notify_reposts"
-        case kapostsNotifyFollows = "kaposts_notify_follows"
-        case kapostsWatchAuthors = "kaposts_watch_authors"
         case primaryAddress = "primary_address"
-        case aliases
         case apnsEnvironment = "apns_environment"
-        case voipToken = "voip_token"
         case watchOnlyAddresses = "watch_only_addresses"
         case apnsTopic = "apns_topic"
         case auth
     }
-}
 
-/// `POST /v1/push/ring` - ring `toAddress`'s devices for a call this device is placing
-/// (PUSH_EXTENSIONS.md §5).
-struct PushRingRequest: Codable {
-    let deviceToken: String
-    let toAddress: String
-    let callId: String
-    let video: Bool
-    /// "invite" (the caller hosts the room) | "request" (the caller asks the callee to host).
-    let kind: String
-    /// The opening call message, encrypted to the callee exactly as on chain, hex.
-    let payload: String
-    let timestampMs: UInt64
-    let auth: PushAuthRequest?
-
-    enum CodingKeys: String, CodingKey {
-        case deviceToken = "device_token"
-        case toAddress = "to_address"
-        case callId = "call_id"
-        case video
-        case kind
-        case payload
-        case timestampMs = "timestamp"
-        case auth
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(deviceToken, forKey: .deviceToken)
+        try container.encode([String](), forKey: .watchedAddresses)
+        try container.encode([String](), forKey: .watchedGroupIds)
+        try container.encodeIfPresent(primaryAddress, forKey: .primaryAddress)
+        try container.encode(apnsEnvironment, forKey: .apnsEnvironment)
+        try container.encode(watchOnlyAddresses, forKey: .watchOnlyAddresses)
+        try container.encodeIfPresent(apnsTopic, forKey: .apnsTopic)
+        try container.encodeIfPresent(auth, forKey: .auth)
     }
 }
 
@@ -2512,7 +1632,6 @@ enum PushError: LocalizedError {
     case registrationInProgress
     case noWatchedAddresses
     case authFailed(reason: String)
-    case ringFailed(statusCode: Int, reason: String?)
     case noPushService
 
     var errorDescription: String? {
@@ -2541,8 +1660,6 @@ enum PushError: LocalizedError {
             return "No addresses available for push notifications"
         case .authFailed(let reason):
             return "Push auth failed: \(reason)"
-        case .ringFailed(let statusCode, let reason):
-            return "Ring push failed (\(statusCode))" + (reason.map { ": \($0)" } ?? "")
         }
     }
 }

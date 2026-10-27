@@ -48,7 +48,6 @@ struct LoadingView: View {
 #Preview {
     ContentView()
         .environmentObject(WalletManager.shared)
-        .environmentObject(ContactsManager.shared)
-        .environmentObject(ChatService.shared)
+        .environmentObject(WalletService.shared)
         .environmentObject(SettingsViewModel())
 }

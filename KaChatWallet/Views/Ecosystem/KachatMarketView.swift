@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The ".kachat" wordmark as a template image - the Kaspa Hub tile, the dock item and Customize
+/// The ".kachat" wordmark as a template image - the dock item and
 /// Dock draw it the way `ChessTabIcon` draws the chess pieces, tinted like any SF Symbol.
 enum KachatTabIcon {
     private static var cache: [String: UIImage] = [:]
@@ -69,7 +69,7 @@ enum KachatTabIcon {
     }
 }
 
-/// Kaspa Hub > .kachat: the marketplace for KaChat's own names - claim one, list it, buy one,
+/// The .kachat tab: the marketplace for KaChat's own names - claim one, list it, buy one,
 /// peer to peer and trustless (the name and the payment settle together on chain, no one holds
 /// either in between).
 ///
@@ -153,7 +153,7 @@ struct KachatMarketView: View {
             }
             .modifier(KachatNameRouteDestination(route: $nameRoute))
             // A notification that opened this screen fresh (a cold start, or .kachat not the open
-            // Kaspa Hub section) leaves its name pending: open it once the screen is up. Pushing in
+            // tab) leaves its name pending: open it once the screen is up. Pushing in
             // the same update as the stack's first appearance came up as a blank screen.
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { takePendingName() }
@@ -168,7 +168,7 @@ struct KachatMarketView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { ConnectionStatusIndicator() }
-                // the marketplace buys with the chatting address, like every other screen pays
+                // the marketplace buys with the main address, like every other screen pays
                 ToolbarItem(placement: .principal) { BalanceToolbarLabel() }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
@@ -440,7 +440,7 @@ struct KachatMarketView: View {
                     howItWorksRow(
                         icon: "at.badge.plus",
                         title: "Claim",
-                        detail: "Pick a free name and register it on Kaspa. It's yours: your name in chats, your profile, your link."
+                        detail: "Pick a free name and register it on Kaspa. It's yours: your name, your profile, your link."
                     )
                     howItWorksRow(
                         icon: "tag",
@@ -507,7 +507,7 @@ struct KachatMarketView: View {
 /// UI only, like the rest of the marketplace: no listing exists yet, so the name, price, seller
 /// and offers are redacted shapes and every final action is disabled. Buy and Make an Offer still
 /// open their sheets so the flow can be looked at. `sellerAddress` is where a real listing hands
-/// in its seller - Message Seller opens a 1:1 chat with it.
+/// in its seller.
 struct KachatListingDetailView: View {
     var sellerAddress: String? = nil
     /// A real name (testnet only): the live detail with its actions instead of the mockup.
@@ -605,22 +605,12 @@ struct KachatListingDetailView: View {
                     .fill(Color.accentColor.opacity(0.25))
                     .frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(verbatim: sellerAddress.map(Contact.generateDefaultAlias(from:)) ?? "kaspa:xxxx....xxxx")
+                    Text(verbatim: sellerAddress.map(KaspaAddress.shortAlias) ?? "kaspa:xxxx....xxxx")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                         .redacted(reason: sellerAddress == nil ? .placeholder : [])
-                    Text("Ask about the name, or agree on a price before you offer.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
                 Spacer(minLength: 8)
-                Button {} label: {
-                    Label("Message", systemImage: "bubble.left.and.bubble.right")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                // Opens a 1:1 chat with `sellerAddress` once listings are real.
-                .disabled(true)
             }
             .padding(14)
             .background(KachatCardBackground())
@@ -692,7 +682,6 @@ struct KachatListingDetailView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Buying pays the seller and moves the name to you in one transaction.", systemImage: "cart")
             Label(KaspaUnit.label(AppLocalization.string("An offer locks your KAS on chain until the seller accepts it, you withdraw it, or it expires.")), systemImage: "lock")
-            Label("Messages go to the seller like any KaChat chat.", systemImage: "bubble.left.and.bubble.right")
         }
         .font(.footnote)
         .foregroundColor(.secondary)
@@ -905,9 +894,9 @@ private struct KachatComingSoonPill: View {
 // MARK: - An address's .kachat names
 
 /// The ".kachat" tab of every screen that shows an address's history - Manage Addresses,
-/// Cold Storage and the chatting address: the .kachat names that address holds. It replaced the
+/// Cold Storage and the main address: the .kachat names that address holds. It replaced the
 /// KNS Domains tab (5.2), and is empty until .kachat names launch.
-/// The Domains tab of an address screen (the chatting address, a spending address, a KasSigner
+/// The Domains tab of an address screen (the main address, a spending address, a KasSigner
 /// address): one card per name service - .kachat, .k, .kaspa, .kas - each with how many names
 /// this address holds there; tap one to see them. Every service is asked at once, for this
 /// address only (Your Domains' own lists are left alone).
@@ -1083,7 +1072,7 @@ struct KachatAddressDomainsList: View {
     }
 }
 
-/// One address's .kachat names on testnet - Manage Addresses (spending), the chatting address and
+/// One address's .kachat names on testnet - Manage Addresses (spending), the main address and
 /// KasSigner each show their own address's names in its .kachat tab. Same cards and detail screen
 /// as Your Domains > .kachat. Names on an address this wallet can't sign for (a KasSigner address)
 /// open read-only: their actions need that address's key.

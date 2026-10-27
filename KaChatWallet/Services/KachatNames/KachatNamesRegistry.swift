@@ -710,119 +710,8 @@ final class KachatNamesRegistry: ObservableObject {
         }
     }
 
-    /// The address's `.kachat` identity as the app shows it, from a cache that fills in the
-    /// background: callable from any view body (on mainnet, profile only). An answer is
-    /// re-asked once the registry moved on or after five minutes, and this wallet's own saved
-    /// profile always wins for its own address. When an answer lands, views that read contact
-    /// names re-render (ContactsManager is told).
-    // MARK: - People shown as an address
-
-    private var unnamedSweepStarted = false
-    private var unnamedSweepRunning = false
-
-    /// While the app is open, once a minute: everyone the app is showing as an address - a contact
-    /// with no name you gave them (chat or Address Book) and no .kachat name known - may be asked
-    /// again whether they have one. Never asked yet, or the last lookup failed (the registry
-    /// still loading at launch): this pass. A "no name" answer backs off - asked again after 1,
-    /// then 5, 15 and 60 minutes - and sooner (after a minute) only once the registry has seen
-    /// new transactions (`revision`), since a name only appears through one (IOS-087). Started
-    /// once, at launch.
-    func startUnnamedIdentitySweep() {
-        // It names chat contacts; KaChat Wallet has none.
-        guard ChatService.chatsEnabled else { return }
-        guard !unnamedSweepStarted else { return }
-        unnamedSweepStarted = true
-        Task { @MainActor [weak self] in
-            // the first pass once the app has settled after launch
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            while let self {
-                if UIApplication.shared.applicationState == .active {
-                    await self.refreshUnnamedIdentities()
-                }
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-            }
-        }
-    }
-
-    private func refreshUnnamedIdentities() async {
-        guard KachatNamesService.profilesEnabled, !unnamedSweepRunning,
-              let me = WalletManager.shared.currentWallet?.publicAddress.lowercased() else { return }
-        unnamedSweepRunning = true
-        defer { unnamedSweepRunning = false }
-        let book = AddressBookManager.shared
-        var targets: [String] = []
-        let byRecency = ContactsManager.shared.contacts.sorted {
-            ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast)
-        }
-        for contact in byRecency {
-            let key = contact.address.lowercased()
-            guard key != me, contact.assignedName == nil, book.entry(for: key)?.customName == nil,
-                  NetworkType(address: key) != nil, NetworkType.isOnActiveNetwork(key) else { continue }
-            if let entry = identities[key] {
-                if entry.identity.label != nil { continue }
-                let age = Date().timeIntervalSince(entry.at)
-                let backoff = Self.unnamedBackoff[min(unnamedAnswers[key] ?? 0, Self.unnamedBackoff.count - 1)]
-                let registryMoved = entry.revision != revision && age > 60
-                if age < backoff, !registryMoved { continue }
-            }
-            targets.append(key)
-        }
-        guard !targets.isEmpty else { return }
-        // One batch for everyone due (the indexer's /identity/batch), so a pass is a single
-        // request however many contacts are unnamed - and nobody waits behind the 40-cap.
-        if let found = await identitiesBatch(targets) {
-            var anyChanged = false
-            for key in targets {
-                guard let identity = found[key] else {
-                    // not in the answer (the indexer skipped it): a miss, asked again in a minute
-                    identityMisses[key] = Date()
-                    continue
-                }
-                identityMisses[key] = nil
-                if storeFetchedIdentity(identity, for: key) { anyChanged = true }
-                // one more "no name" in a row backs the next ask off further
-                unnamedAnswers[key] = identity.label == nil ? (unnamedAnswers[key] ?? 0) + 1 : nil
-            }
-            if anyChanged {
-                ContactsManager.shared.objectWillChange.send()
-                ContactsManager.shared.scheduleSharedNameSync()
-            }
-            return
-        }
-        // No batch (the chain walker - local lookups - or an indexer without the endpoint yet):
-        // a few at a time, the people you talk to most recently first.
-        for key in targets.prefix(40) {
-            guard UIApplication.shared.applicationState == .active else { return }
-            if let found = await refreshIdentity(address: key) {
-                unnamedAnswers[key] = found.label == nil ? (unnamedAnswers[key] ?? 0) + 1 : nil
-            }
-        }
-    }
-
-    /// How long a "no name" answer is trusted by the sweep, by how many came in a row.
-    private static let unnamedBackoff: [TimeInterval] = [60, 300, 900, 3600]
-    /// "No name" answers in a row, per address (in memory: a relaunch starts over at a minute).
-    private var unnamedAnswers: [String: Int] = [:]
-
-    /// Looks the address's identity up now, whatever the cache holds (User Info > Rescan
-    /// Profile), and stores the answer for every view that reads `cachedIdentity`.
-    @discardableResult
-    func refreshIdentity(address: String) async -> KachatNames.Identity? {
-        guard KachatNamesService.profilesEnabled else { return nil }
-        let key = address.lowercased()
-        guard NetworkType(address: key) != nil, NetworkType.isOnActiveNetwork(key),
-              let found = try? await identity(address: key) else { return nil }
-        identityMisses[key] = nil
-        if storeFetchedIdentity(found, for: key) {
-            ContactsManager.shared.objectWillChange.send()
-            ContactsManager.shared.scheduleSharedNameSync()
-        }
-        return found
-    }
-
     /// Files a fetched identity in the cache; true when it changed (the caller then tells
-    /// ContactsManager, once per batch rather than per address). An unchanged answer only
-    /// stamps the entry fresh.
+    /// AddressBookManager). An unchanged answer only stamps the entry fresh.
     private func storeFetchedIdentity(_ found: KachatNames.Identity, for key: String) -> Bool {
         if identities[key]?.identity != found {
             objectWillChange.send()
@@ -835,28 +724,11 @@ final class KachatNamesRegistry: ObservableObject {
         return false
     }
 
-    /// Everyone at once: `POST /identity/batch` (one request and two set queries on the indexer,
-    /// against one GET per address), keyed back by lowercased address. nil when the source is
-    /// the chain walker (each lookup is local anyway) or the indexer doesn't serve the endpoint
-    /// yet - the caller falls back to per-address lookups.
-    private func identitiesBatch(_ addresses: [String]) async -> [String: KachatNames.Identity]? {
-        guard KachatNamesService.isLaunched, !addresses.isEmpty else { return nil }
-        guard (try? await prepare()) != nil, case .indexer(let base) = source else { return nil }
-        struct BatchBody: Encodable { let addresses: [String] }
-        struct BatchJSON: Decodable { let identities: [String: KachatNames.IndexerAPI.IdentityJSON] }
-        var out: [String: KachatNames.Identity] = [:]
-        // the indexer takes at most 200 per call
-        for chunk in stride(from: 0, to: addresses.count, by: 200).map({ Array(addresses[$0..<min($0 + 200, addresses.count)]) }) {
-            guard let answer: BatchJSON = try? await Self.post(base, "/identity/batch", BatchBody(addresses: chunk)) else {
-                return nil
-            }
-            for (address, identity) in answer.identities {
-                out[address.lowercased()] = identity.identity
-            }
-        }
-        return out
-    }
-
+    /// The address's `.kachat` identity as the app shows it, from a cache that fills in the
+    /// background: callable from any view body (on mainnet, profile only). An answer is
+    /// re-asked once the registry moved on or after five minutes, and this wallet's own saved
+    /// profile always wins for its own address. When an answer lands, views that read Address
+    /// Book names re-render (AddressBookManager is told).
     func cachedIdentity(for address: String) -> KachatNames.Identity? {
         guard KachatNamesService.profilesEnabled else { return nil }
         let key = address.lowercased()
@@ -884,8 +756,7 @@ final class KachatNamesRegistry: ObservableObject {
                 }
                 self.identityMisses[key] = nil
                 if self.storeFetchedIdentity(found, for: key) {
-                    ContactsManager.shared.objectWillChange.send()
-                    ContactsManager.shared.scheduleSharedNameSync()
+                    AddressBookManager.shared.objectWillChange.send()
                 }
             }
         }
@@ -940,7 +811,7 @@ final class KachatNamesRegistry: ObservableObject {
         identityLookups = []
         KachatProfileCache.remove(Self.identitiesFile)
         revision += 1
-        ContactsManager.shared.objectWillChange.send()
+        AddressBookManager.shared.objectWillChange.send()
     }
 
     /// The profile record this device last wrote for `address`.
@@ -1495,7 +1366,7 @@ final class KachatNamesNotifier {
         checking = true
         defer { checking = false }
         let registry = KachatNamesRegistry.shared
-        // every address of this wallet, not only the chatting one: a name claimed with Buy From
+        // every address of this wallet, not only the main one: a name claimed with Buy From
         // gets its notices too (IOS-085 / XP-024)
         guard let own = try? await KachatNamesActions.shared.ownNamesAndOffers(heldOnly: false) else { return }
         let owned = own.names
@@ -1505,7 +1376,7 @@ final class KachatNamesNotifier {
         for n in owned where n.status(graceMs: p.graceMs) == .active {
             offersOnMine += ((try? await registry.offers(for: n.name)) ?? []).filter { ownKeys.contains($0.seller) }
         }
-        // The indexer pushes name reminders only to the chatting address: for a name on another
+        // The indexer pushes name reminders only to the main address: for a name on another
         // address of this wallet the phone schedules its own (XP-024).
         // a different wallet signed in meanwhile: this answer isn't its
         guard KachatNamesActions.shared.myAddress == wallet else { return }
@@ -1607,7 +1478,7 @@ final class KachatNamesNotifier {
 }
 
 /// Local reminders for .kachat names held by one of this wallet's spending addresses (Buy From):
-/// the indexer's renewal and expiry pushes reach only the chatting address, so the phone
+/// the indexer's renewal and expiry pushes reach only the main address, so the phone
 /// schedules its own - renewal opens, the name expired, and a day before grace ends - from each
 /// name's expiry (XP-024). Nothing leaves the phone. Rescheduled on every notifier check: a
 /// renewed name moves its reminders, a name that left the wallet loses them. Tapping one opens

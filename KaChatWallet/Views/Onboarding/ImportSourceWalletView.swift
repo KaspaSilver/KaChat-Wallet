@@ -4,7 +4,7 @@ import SwiftUI
 /// Import Existing Account (before seed entry, which then continues exactly as before). The
 /// selection maps a wallet name to its identity derivation-path family (`WalletSourceFamily`,
 /// rules replicated from KasWare's RESTORE_WALLETS/ADDRESS_TYPES + hd-keyring derivation), so
-/// KaChat derives the chatting identity where that wallet actually kept the user's funds and
+/// the main (identity) address is derived where that wallet actually kept the user's funds and
 /// KNS domains. KaChat is preselected at the top; the spending chain always stays on KaChat's
 /// own m/44'/111111'/1' branch regardless of this choice (see WalletManager's decision comment).
 struct ImportSourceWalletView: View {

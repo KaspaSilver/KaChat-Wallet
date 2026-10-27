@@ -85,7 +85,7 @@ struct WalletRecoveryView: View {
                 Button("Remove", role: .destructive) { remove() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The account and its message history are deleted from this phone. Nothing on the blockchain changes, and you can add the account again later with its recovery phrase.")
+                Text("The account and its data are deleted from this phone. Nothing on the blockchain changes, and you can add the account again later with its recovery phrase.")
             }
             .alert("Couldn't remove", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK", role: .cancel) {}

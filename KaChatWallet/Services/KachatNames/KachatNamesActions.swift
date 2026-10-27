@@ -183,7 +183,7 @@ final class KachatNamesActions: ObservableObject {
         return Signer(address: address, privateKey: key, me: me)
     }
 
-    /// The current wallet's chatting address and key on the network the app runs on - the
+    /// The current wallet's main address and key on the network the app runs on - the
     /// profile record's signer. Unlike `signer()` it isn't testnet-only: profiles work on mainnet
     /// before its registry launches (`KachatNamesService.profilesEnabled`).
     func profileSigner() throws -> Signer {
@@ -205,7 +205,7 @@ final class KachatNamesActions: ObservableObject {
         case kasSigner(account: String, index: Int, address: String)
     }
 
-    /// Whether `owner` (an x-only key) is one of this wallet's addresses, and which: the chatting
+    /// Whether `owner` (an x-only key) is one of this wallet's addresses, and which: the main
     /// address, a revealed spending address, or a KasSigner account address. nil = someone else.
     func ownAddress(of owner: Data) -> OwnAddress? {
         if owner == myKey { return .chatting }
@@ -228,7 +228,7 @@ final class KachatNamesActions: ObservableObject {
     /// The signer for `op`. Owner-only actions (transfer, list/delist, accept, release) on a name
     /// held by one of this wallet's spending addresses sign - and pay their fee - from that
     /// address. Everything else, including extend and renew (anyone may pay those), uses the
-    /// chatting address.
+    /// main address.
     private func signer(for op: Operation) throws -> Signer {
         let heldBy: Data?
         switch op {
@@ -247,7 +247,7 @@ final class KachatNamesActions: ObservableObject {
         case .withdraw(let o), .refund(let o):
             if let mine = try? ownerSigner(o.buyer) { return mine }
             return try signer()
-        // paid by, and (buy, offer) belonging to, the chatting address
+        // paid by, and (buy, offer) belonging to, the main address
         case .buy, .offer, .extend, .renew:
             return try buyerSigner()
         default:
@@ -267,7 +267,7 @@ final class KachatNamesActions: ObservableObject {
         return Signer(address: address.lowercased(), privateKey: key, me: me)
     }
 
-    /// The signer for whichever of this wallet's addresses holds `owner` (the chatting address or
+    /// The signer for whichever of this wallet's addresses holds `owner` (the main address or
     /// a spending address) - a claim in progress keeps the address it was started from.
     private func ownerSigner(_ owner: Data) throws -> Signer {
         switch ownAddress(of: owner) {
@@ -278,7 +278,7 @@ final class KachatNamesActions: ObservableObject {
     }
 
     /// Who buys: claims, purchases, offers, extend and renew always pay from - and a new name
-    /// always belongs to - the chatting address (owner's call, 2026-10-21: no Buy From picker).
+    /// always belongs to - the main address (owner's call, 2026-10-21: no Buy From picker).
     /// Names an earlier build bought from a spending address keep that owner, and the owner's
     /// own key still signs for them (`signer(for:)`, `ownAddress(of:)`).
     func buyerSigner() throws -> Signer {
@@ -311,7 +311,7 @@ final class KachatNamesActions: ObservableObject {
 
     /// Spending addresses an earlier build bought with (the retired Buy From picker), per wallet:
     /// Your Domains and the marketplace still list the names and offers they hold next to the
-    /// chatting address's. Nothing adds to it any more.
+    /// main address's. Nothing adds to it any more.
     var marketAddresses: [String] {
         guard let key = marketAddressesKey else { return [] }
         return UserDefaults.standard.stringArray(forKey: key) ?? []
@@ -321,7 +321,7 @@ final class KachatNamesActions: ObservableObject {
 
     private var ownKeyCache: (key: String, keys: Set<Data>)?
 
-    /// The chatting key and every revealed spending address's key: a name or an offer on any of
+    /// The main key and every revealed spending address's key: a name or an offer on any of
     /// them is this wallet's, on every device restored from the seed - not only on the one that
     /// bought it. Worked out once per account and address count, so a view body may ask.
     var allOwnKeys: Set<Data> {
@@ -345,7 +345,7 @@ final class KachatNamesActions: ObservableObject {
 
     private var nameKeysCache: (key: String, at: Date, keys: [Data])?
 
-    /// The keys worth asking the registry about (one lookup each): the chatting key, then every
+    /// The keys worth asking the registry about (one lookup each): the main key, then every
     /// revealed spending address that has ever been used - a name or an offer needs KAS on its
     /// address - and the addresses Buy From was set to. The used/unused answers are cached (used
     /// is for good), so after the first time this costs no requests; the list itself is kept
@@ -360,7 +360,7 @@ final class KachatNamesActions: ObservableObject {
         let spending = manager.spendingAddresses(inRange: 0..<(max(0, manager.maxSpendingAddressIndex) + 1))
             .sorted { $0.key < $1.key }.map(\.value)
         let hints = Set(marketAddresses)
-        let chat = ChatService.shared
+        let chat = WalletService.shared
         var used: [String: Bool] = [:]
         var toProbe: [String] = []
         for address in spending {
@@ -659,19 +659,19 @@ final class KachatNamesActions: ObservableObject {
 
     /// Combines the wallet's coins into one: a plain send of up to `maxInputsPerTransaction`
     /// largest coins to the same address (a tiny network fee), then waits until a node has the
-    /// combined coin, so the name transaction can be built from it. Never a coin a scheduled
-    /// KaPost holds or one carrying a covenant.
+    /// combined coin, so the name transaction can be built from it. Never a coin carrying a
+    /// covenant.
     @discardableResult
     func combineCoins(_ s: Signer) async throws -> String {
         let utxos = try await NodePoolService.shared.getUtxosByAddresses([s.address])
-        let plain = KaPostsScheduledStore.filterReserved(utxos)
+        let plain = utxos
             .filter { $0.covenantId == nil }
             .sorted { $0.amount > $1.amount }
             .prefix(KasiaTransactionBuilder.maxInputsPerTransaction)
         let total = plain.reduce(UInt64(0)) { $0 + $1.amount }
         let feeRoom: UInt64 = 5_000_000 // 0.05 KAS: the fee, with what's left coming back as change
         guard plain.count > 1, total > feeRoom * 2 else {
-            throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your chatting address for this."))
+            throw KachatNames.Failure(AppLocalization.string("Not enough KAS on your main address for this."))
         }
         let daa = await NodePoolService.shared.currentVirtualDaaScore()
         let tx = try KasiaTransactionBuilder.buildPlainTransferTx(
@@ -679,8 +679,7 @@ final class KachatNamesActions: ObservableObject {
             senderPrivateKey: s.privateKey, utxos: Array(plain), virtualDaaScore: daa
         )
         let (txId, _) = try await NodePoolService.shared.submitTransaction(tx)
-        // a move between your own coins, not a payment to show in the chats
-        ChatService.shared.registerSuppressedPaymentTxIds([txId], reason: "kachat-names")
+        // a move between your own coins, not a payment
         AppLog.log("[KachatNames] combined %d coins into one: %@", plain.count, txId)
         for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -1000,7 +999,7 @@ final class KachatNamesActions: ObservableObject {
 
     /// Writes the address profile (`kchat:1:profile:`): a self-transfer, network fee only.
     @discardableResult
-    /// What saving `profile` will cost: the profile record is a self-transfer from the chatting
+    /// What saving `profile` will cost: the profile record is a self-transfer from the main
     /// address, so the network fee is all it spends. Built (and signed) the same way the save
     /// builds it, never sent.
     func profileFee(_ profile: KachatNames.Profile) async throws -> UInt64 {
@@ -1397,7 +1396,7 @@ final class KachatNamesActions: ObservableObject {
 
     private func register(_ p: KachatNames.PendingRegistration, commit: KachatNames.Utxo) async {
         do {
-            // the address the claim was started from signs and pays, chatting or spending
+            // the address the claim was started from signs and pays, main or spending
             guard let s = try? ownerSigner(try KachatNames.unhex32(p.owner)) else { return }
             guard let salt = try KeychainService.shared.loadKachatCommitSalt(id: p.id, walletAddress: pendingWallet ?? s.address) else { throw ActionError.noSalt }
             await registry.refresh()

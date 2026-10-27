@@ -3,7 +3,7 @@ import Foundation
 /// Per-wallet persistence for the Portfolio investment ledger and the wallet's list of
 /// up-to-5 named portfolios. Each wallet gets its own ledger (all its portfolios' transactions
 /// together, self-describing their `portfolioId`) and its own portfolio list, keyed by wallet
-/// address, mirroring ColdStorageManager/ContactsManager's per-wallet UserDefaults key pattern.
+/// address, mirroring ColdStorageManager/AddressBookManager's per-wallet UserDefaults key pattern.
 enum PortfolioLedgerStore {
     private struct Snapshot: Codable {
         let version: Int

@@ -11,7 +11,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     @Published private(set) var profileCache: [String: KNSAddressProfileInfo] = [:]
 
     /// In-flight fetches keyed by address, so concurrent callers for the same not-yet-cached
-    /// address (e.g. many KaPosts feed rows by the same poster mounting at once) await the SAME
+    /// address (e.g. many rows for the same address mounting at once) await the SAME
     /// network request instead of each firing their own - mirrors `LinkPreviewService.inFlight`.
     /// Crucially these are unstructured Tasks: a row's `.task` being cancelled on scroll-away no
     /// longer cancels the underlying fetch, so the result always lands in the cache.
@@ -58,7 +58,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     private let failureCooldownBase: TimeInterval = 30
     private let failureCooldownMax: TimeInterval = 10 * 60
 
-    /// Persisted caches and attempt bookkeeping stay bounded - a KaPosts feed can surface
+    /// Persisted caches and attempt bookkeeping stay bounded - a long list can surface
     /// hundreds of unique poster addresses over time.
     private let maxCacheEntries = 512
     private let maxAttemptEntries = 2_048
@@ -998,9 +998,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// app. Off since 5.2 - only the domain name is resolved; see `fetchProfileInternal`.
     static let loadsDomainProfiles = false
 
-    /// Whether an ADDRESS is shown by its .kas name anywhere in the app - contacts, chat rows,
-    /// User Info, group and public chat senders, KaPosts authors, chess players, calls. Off since
-    /// 5.2: someone without a .kachat name is shown by their address (or the name you gave
+    /// Whether an ADDRESS is shown by its .kas name anywhere in the app. Off since 5.2: someone without a .kachat name is shown by their address (or the name you gave
     /// them). The profile lookups that carried the name (`fetchProfile`, `getProfile`,
     /// `refreshProfilesIfNeeded`) answer nil without asking KNS, and `identityInfo(for:)` is
     /// the domain-list read for display. Your Domains (managing your own .kas names) and typing
@@ -1070,7 +1068,7 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
 
         // NEVER cache an errored lookup (rate limit, timeout, offline) as a real result. The
         // old fall-through cached it as a permanent "address has no KNS" entry - persisted to
-        // UserDefaults - which is exactly how some KaPosts avatars/names got stuck missing
+        // UserDefaults - which is exactly how some avatars/names got stuck missing
         // forever. Return what we have; the failure cooldown + refresh backoff handle retrying.
         if hadError {
             return (domainCache[address], true)
@@ -1116,7 +1114,6 @@ final class KNSService: NSObject, ObservableObject, URLSessionTaskDelegate {
         // notification extension's mentions-only gate can match Android-composed @domain
         // mention tokens (see SharedDataManager.syncOwnKNSDomainForExtension).
         if address == WalletManager.shared.currentWallet?.publicAddress {
-            SharedDataManager.syncOwnKNSDomainForExtension()
         }
     }
 
@@ -1578,7 +1575,7 @@ final class KNSProfileWriteService: ObservableObject {
         guard let privateKey = WalletManager.shared.getPrivateKey() else {
             throw KasiaError.keychainError("Could not get private key")
         }
-        // KNS activity is funded and settled entirely on the chatting/identity address - no
+        // KNS activity is funded and settled entirely on the main (identity) address - no
         // spending-address split, so nothing ends up scattered across two addresses.
         let fundingAddress = wallet.publicAddress
         let fundingPrivateKey = privateKey
@@ -1617,7 +1614,7 @@ final class KNSProfileWriteService: ObservableObject {
             let totalSompi = utxos.reduce(UInt64(0)) { $0 + $1.amount }
             log("UTXO field=\(key.rawValue) total=\(fetchedUtxos.count) spendable=\(utxos.count) sumSompi=\(totalSompi)")
             guard !utxos.isEmpty else {
-                throw KasiaError.networkError("No spendable UTXOs available in your chatting address for this KNS update")
+                throw KasiaError.networkError("No spendable UTXOs available in your main address for this KNS update")
             }
 
             let (commitTx, commitContext) = try KasiaTransactionBuilder.buildKNSAddProfileCommitTx(
@@ -1630,10 +1627,6 @@ final class KNSProfileWriteService: ObservableObject {
             log("COMMIT_BUILT field=\(key.rawValue) commitAmount=\(commitContext.commitAmountSompi) revealAmount=\(commitContext.revealAmountSompi)")
             let (commitTxId, _) = try await nodePool.submitTransaction(commitTx, allowOrphan: false)
             log("COMMIT_SUBMITTED field=\(key.rawValue) txId=\(commitTxId)")
-            ChatService.shared.registerSuppressedPaymentTxIds(
-                [commitTxId],
-                reason: "kns-profile-commit"
-            )
 
             operation.commitTxId = commitTxId
             operation.status = .submittingReveal
@@ -1650,10 +1643,6 @@ final class KNSProfileWriteService: ObservableObject {
             )
             let (revealTxId, _) = try await submitRevealWithFallback(revealTx)
             log("REVEAL_SUBMITTED field=\(key.rawValue) txId=\(revealTxId)")
-            ChatService.shared.registerSuppressedPaymentTxIds(
-                [commitTxId, revealTxId],
-                reason: "kns-profile-reveal"
-            )
 
             operation.revealTxId = revealTxId
             operation.status = .verifying
@@ -1733,7 +1722,7 @@ final class KNSDomainInscribeService: ObservableObject {
         guard let privateKey = walletManager.getPrivateKey() else {
             throw KasiaError.keychainError("Could not get private key")
         }
-        // KNS activity is funded and settled entirely on the chatting/identity address - no
+        // KNS activity is funded and settled entirely on the main (identity) address - no
         // spending-address split, so nothing ends up scattered across two addresses.
         let fundingAddress = wallet.publicAddress
         let fundingPrivateKey = privateKey
@@ -1767,7 +1756,7 @@ final class KNSDomainInscribeService: ObservableObject {
         let fetchedUtxos = try await nodePool.getUtxosByAddresses([fundingAddress])
         let utxos = fetchedUtxos.filter { !$0.isCoinbase && $0.blockDaaScore > 0 }
         guard !utxos.isEmpty else {
-            throw KasiaError.networkError("No spendable UTXOs available in your chatting address for KNS inscription")
+            throw KasiaError.networkError("No spendable UTXOs available in your main address for KNS inscription")
         }
         log("UTXO domain=\(fullDomain) total=\(fetchedUtxos.count) spendable=\(utxos.count)")
 
@@ -1783,10 +1772,6 @@ final class KNSDomainInscribeService: ObservableObject {
         )
         let (commitTxId, _) = try await nodePool.submitTransaction(commitTx, allowOrphan: false)
         log("COMMIT_SUBMITTED domain=\(fullDomain) txId=\(commitTxId)")
-        ChatService.shared.registerSuppressedPaymentTxIds(
-            [commitTxId],
-            reason: "kns-inscribe-commit"
-        )
 
         let revealTarget = try revealTargetAddress(
             walletAddress: wallet.publicAddress,
@@ -1802,10 +1787,6 @@ final class KNSDomainInscribeService: ObservableObject {
         )
         let (revealTxId, _) = try await submitRevealWithFallback(revealTx)
         log("REVEAL_SUBMITTED domain=\(fullDomain) txId=\(revealTxId)")
-        ChatService.shared.registerSuppressedPaymentTxIds(
-            [commitTxId, revealTxId],
-            reason: "kns-inscribe-reveal"
-        )
 
         let verified = await verifyDomainOwnership(
             fullDomain: fullDomain,
@@ -1935,7 +1916,7 @@ final class KNSDomainTransferService: ObservableObject {
         AppLog.log("[KNS_TRANSFER] %@", message)
     }
 
-    /// Transfers a domain owned by the wallet's identity/chatting address by default. Pass
+    /// Transfers a domain owned by the wallet's identity/main address by default. Pass
     /// `fromSpendingAddressIndex` to instead transfer a domain owned by one of the wallet's
     /// spending-chain addresses: that address then acts as owner, funder, signer, and change
     /// target for the whole commit/reveal pair - mirroring how spending-address sends derive
@@ -2013,7 +1994,7 @@ final class KNSDomainTransferService: ObservableObject {
             sourceAddress = address
             sourcePrivateKey = key
         } else {
-            // KNS activity is funded and settled entirely on the identity/chatting address
+            // KNS activity is funded and settled entirely on the identity/main address
             // chain by default - same as submitAddProfile/inscribeDomain.
             guard let wallet = walletManager.currentWallet else {
                 throw KasiaError.walletNotFound
@@ -2029,7 +2010,7 @@ final class KNSDomainTransferService: ObservableObject {
         // A transfer funded by the PRIMARY spending address is a send out of it, so both
         // transactions' change lands on a fresh index (past the all-time max: never revealed,
         // funded or offered) and the primary rotates there once the reveal is accepted - the
-        // same rule as chat payments and withdrawals. The domain itself leaves anyway; the old
+        // same rule as withdrawals. The domain itself leaves anyway; the old
         // address keeps any other domains it holds and stays listed in Manage Addresses. If
         // the fresh address cannot be derived, change stays on the source and nothing rotates.
         var freshChangeIndex: Int?
@@ -2058,7 +2039,7 @@ final class KNSDomainTransferService: ObservableObject {
         // A domain sent to a script (P2SH) address - a quantum-safe address among them - could
         // never be moved again: KNS identifies an owner by a public key, which such an address
         // doesn't show.
-        if ChatService.isScriptAddress(recipientAddress) {
+        if WalletService.isScriptAddress(recipientAddress) {
             throw KasiaError.apiError(AppLocalization.string("A .kas domain can't be sent to a quantum-safe or other script address: KNS could never move it out again. Send it to a regular address instead."))
         }
 
@@ -2087,7 +2068,7 @@ final class KNSDomainTransferService: ObservableObject {
         guard !utxos.isEmpty else {
             throw KasiaError.networkError(
                 fromSpendingAddressIndex == nil
-                ? "No spendable UTXOs available in your chatting address for KNS transfer"
+                ? "No spendable UTXOs available in your main address for KNS transfer"
                 : "No spendable UTXOs available in this spending address for KNS transfer"
             )
         }
@@ -2120,10 +2101,6 @@ final class KNSDomainTransferService: ObservableObject {
             await walletManager.setActiveSpendingAddress(freshChangeIndex, owner: accountAddress)
         }
         await report(.waitingForCommit)
-        ChatService.shared.registerSuppressedPaymentTxIds(
-            [commitTxId],
-            reason: "kns-transfer-commit"
-        )
 
         let revealTx = try KasiaTransactionBuilder.buildKNSAddProfileRevealTx(
             ownerAddress: sourceAddress,
@@ -2138,17 +2115,6 @@ final class KNSDomainTransferService: ObservableObject {
         let (revealTxId, _) = try await submitRevealWithFallback(revealTx)
         log("REVEAL_SUBMITTED domain=\(domain) txId=\(revealTxId)")
         await report(.verifying)
-        ChatService.shared.registerSuppressedPaymentTxIds(
-            [commitTxId, revealTxId],
-            reason: "kns-transfer-reveal"
-        )
-        ChatService.shared.registerKNSTransferChatHint(
-            txId: revealTxId,
-            domainName: domain,
-            domainId: assetId,
-            counterpartyAddress: recipientAddress,
-            isOutgoing: true
-        )
 
         let verified = await verifyDomainOwnership(
             fullDomain: domain,

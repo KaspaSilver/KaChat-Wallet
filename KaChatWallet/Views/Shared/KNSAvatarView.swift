@@ -5,23 +5,19 @@ import SwiftUI
 import UIKit
 
 /// The one avatar view in the app. Resolution order, applied here so no call site ever
-/// re-implements it: KNS / `.kachat` avatar -> the photo carried in the chat backup -> person
-/// glyph. (KaChat no longer reads the phone's Contacts, so there is no Contacts-app photo.)
+/// re-implements it: a caller-resolved image (an Address Book photo) -> KNS / `.kachat` avatar ->
+/// person glyph.
 ///
-/// Pass `contactAddress` wherever the avatar stands for a person with a Kaspa address (chat
-/// rows, chat header, chat info, message bubbles, group member lists, pickers, share targets,
-/// KaPosts authors).
+/// Pass `contactAddress` wherever the avatar stands for a Kaspa address (Address Book rows,
+/// pickers, .kachat owners).
 struct KNSAvatarView: View {
     let avatarURLString: String?
     let fallbackText: String
     var size: CGFloat = 44
     /// Caller-resolved image that wins over everything else (rare).
     var overrideImage: UIImage? = nil
-    /// Kaspa address this avatar represents: its `.kachat` avatar and its backup photo.
+    /// Kaspa address this avatar represents: its `.kachat` avatar.
     var contactAddress: String? = nil
-    /// False shows only what the address set as its own avatar (the Address Book), never a photo
-    /// carried in the chat backup for the chat contact.
-    var includeBackupPhoto: Bool = true
 
     @State private var loadedImage: UIImage?
     @State private var isLoading = false
@@ -38,29 +34,6 @@ struct KNSAvatarView: View {
         let link = kachatRegistry.cachedIdentity(for: contactAddress)?.profile?.avatar
         return socialImages.profile(for: link)?.avatar
     }
-    /// Decoded cache so a base64 backup photo is turned into a UIImage once, not on every
-    /// body pass while scrolling. Keyed by CONTACT ADDRESS, not the base64 itself: the old
-    /// key allocated and hashed a multi-KB NSString from the photo blob on every body pass,
-    /// and the cache had no bounds. Cost-limited so hundreds of contacts can't grow it forever.
-    private static let backupPhotoCache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
-        cache.countLimit = 256
-        cache.totalCostLimit = 24 * 1024 * 1024
-        return cache
-    }()
-    /// The cross-platform backup photo (base64 JPEG on the Contact), decoded lazily. Only the
-    /// final fallback before the glyph, so it is evaluated only for contacts with no KNS photo.
-    private var backupPhotoImage: UIImage? {
-        guard includeBackupPhoto, overrideImage == nil, let contactAddress,
-              let base64 = ContactsManager.shared.getContact(byAddress: contactAddress)?.backupPhoto,
-              !base64.isEmpty else { return nil }
-        let key = contactAddress as NSString
-        if let cached = Self.backupPhotoCache.object(forKey: key) { return cached }
-        guard let data = Data(base64Encoded: base64), let image = UIImage(data: data) else { return nil }
-        Self.backupPhotoCache.setObject(image, forKey: key, cost: data.count)
-        return image
-    }
-
     var body: some View {
         let descriptor = KNSProfileImageDescriptor.from(raw: effectiveAvatarURLString)
         // already decoded in memory: shown on this very frame, no glyph flash while the task runs
@@ -74,12 +47,6 @@ struct KNSAvatarView: View {
                     .scaledToFill()
             } else if let shown = memoryImage ?? loadedImage {
                 Image(uiImage: shown)
-                    .resizable()
-                    .scaledToFill()
-            } else if let backupPhoto = backupPhotoImage {
-                // A photo carried in the cross-platform backup (e.g. set on desktop): the last
-                // photo fallback before the glyph.
-                Image(uiImage: backupPhoto)
                     .resizable()
                     .scaledToFill()
             } else {
@@ -608,7 +575,7 @@ private actor KNSProfileImageCache {
     private let diskHighWaterBytes: Int64 = 64 * 1024 * 1024
     private let diskLowWaterBytes: Int64 = 48 * 1024 * 1024
     /// `lastAccessedAt` bumps are batched: rewriting the manifest on every disk read would
-    /// turn a scroll through the chat list into a stream of file writes, so a read only
+    /// turn a scroll through a long list into a stream of file writes, so a read only
     /// persists when the last write is older than the interval (any other write picks up the
     /// pending bumps for free).
     private var manifestAccessPersistedAt = Date.distantPast
@@ -1106,7 +1073,7 @@ enum KNSProfileImagePrefetcher {
 
         // A sliding window of `maxConcurrent` in-flight loads: one finishes, the next starts.
         // The previous version sliced into batches and then awaited each item in turn, so it
-        // was fully sequential and `maxConcurrent` did nothing. Prefetch feeds the chat list,
+        // was fully sequential and `maxConcurrent` did nothing. Prefetch feeds long lists,
         // so it warms the row-sized variant.
         let concurrency = max(1, maxConcurrent)
         let thumbnailSize = KNSProfileImageCache.rowThumbnailMaxPixelSize

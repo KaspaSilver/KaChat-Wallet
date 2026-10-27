@@ -1,8 +1,3 @@
-// Local, gitignored secrets (API keys). Optional include: missing file is fine - the app
-// builds with empty keys. Copy Secrets.xcconfig.example to Secrets.xcconfig and fill in real
-// values.
-#include? "Secrets.xcconfig"
-
 // KaChat Wallet's version and build number - the one place to change them.
 //
 // App Store Connect wants each upload's build number (CFBundleVersion) strictly above the last

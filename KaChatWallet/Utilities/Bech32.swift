@@ -230,6 +230,16 @@ struct KaspaAddress {
         return KaspaAddress(hrp: hrp, type: type, payload: publicKey)
     }
 
+    /// An address shortened for a name slot: "kaspa:qzy7....d2fu".
+    static func shortAlias(_ address: String) -> String {
+        let parts = address.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else { return address }
+        let prefix = parts[0]
+        let body = parts[1]
+        guard body.count > 12 else { return "\(prefix):\(body)" }
+        return "\(prefix):\(body.prefix(4))....\(body.suffix(4))"
+    }
+
     /// Validate a Kaspa address string
     static func isValid(_ address: String) -> Bool {
         guard let decoded = Bech32.decode(address) else {
@@ -313,7 +323,7 @@ struct KaspaAddress {
     }
 
     /// Inverse of `scriptPublicKey(from:)` - recovers the address that a script pays to.
-    /// Used to derive a public chat message's sender directly from a self-stash tx's own
+    /// Used to derive an address directly from a tx's own
     /// output, without needing the sender's public key ahead of time.
     static func address(fromScriptPublicKey script: Data, hrp: String = "kaspa") -> String? {
         guard script.count >= 2 else { return nil }

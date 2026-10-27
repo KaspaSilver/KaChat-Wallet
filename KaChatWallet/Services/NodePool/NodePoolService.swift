@@ -71,7 +71,6 @@ final class NodePoolService: ObservableObject {
     private var statsUpdateTask: Task<Void, Never>?
     private var previousPoolHealth: PoolHealth?
     /// Client tokens currently wanting block-added notifications - see subscribeBlockAdded.
-    private var blockAddedClients: Set<String> = []
 
     // MARK: - Initialization
 
@@ -312,7 +311,7 @@ final class NodePoolService: ObservableObject {
         AppLog.log("[NodePool] Shutdown complete")
     }
 
-    /// True while discovery/probe loops are paused via `pauseDiscovery()` (e.g. off the chat tab).
+    /// True while discovery/probe loops are paused via `pauseDiscovery()` (e.g. off the home tab).
     private(set) var isDiscoveryPaused = false
 
     /// Pauses the node discovery/probe loops (the aggressive background scanning), the periodic
@@ -320,7 +319,7 @@ final class NodePoolService: ObservableObject {
     /// cached active nodes, the connection pool, the epoch monitor and any live UTXO subscription
     /// all stay intact, so on-demand work (sending, balance refresh, transaction history) and
     /// message/balance delivery keep working; only the background scanning stops. Idempotent.
-    /// Used to stop scanning while the user is away from the chat tab. Contrast with `shutdown()`,
+    /// Used to stop scanning while the user is away from the home tab. Contrast with `shutdown()`,
     /// which is the destructive all-or-nothing teardown.
     func pauseDiscovery() async {
         guard isInitialized, !isDiscoveryPaused else { return }
@@ -409,7 +408,7 @@ final class NodePoolService: ObservableObject {
     /// Get UTXOs by addresses
     /// Uses ordered failover: active nodes by lowest latency first, then selector fallback.
     /// `allowRestFallback: false` asks nodes only - for a check whose point is a source other
-    /// than the REST API (`ChatService.nodeConfirmsIncomingPayment`).
+    /// than the REST API (`WalletService.nodeConfirmsIncomingPayment`).
     func getUtxosByAddresses(_ addresses: [String], allowRestFallback: Bool = true) async throws -> [UTXO] {
         let op: OperationClass = .getUtxosByAddress
         let activeCandidates = await registry.records(inState: .active)
@@ -912,30 +911,6 @@ final class NodePoolService: ObservableObject {
         subscriptionManager?.unsubscribe()
     }
 
-    /// Subscribe to block-added notifications (piggybacks on the primary UTXO connection).
-    /// Tracked per client token: GroupChatService and PublicChatService gate their block scans
-    /// independently (group count, open rooms, expensive-path state), and the underlying
-    /// wanted-flag is a single bool - without the token set, one client unsubscribing would
-    /// silently stop re-registration for the other on the next reconnect.
-    func subscribeBlockAdded(client: String) async {
-        blockAddedClients.insert(client)
-        await subscriptionManager?.setBlockAddedWanted(true)
-    }
-
-    /// Stop wanting block-added notifications for one client; the wanted-flag only drops when
-    /// no client is left. Protocol wrinkle (see UtxoSubscriptionManager.setBlockAddedWanted):
-    /// there is no notify-STOP for block-added, so a connection that already registered keeps
-    /// receiving block pushes until it naturally reconnects (failover, network path change,
-    /// app background/foreground - all frequent on iOS). Deliberately NOT force-closing that
-    /// connection here: it is the primary utxosChanged subscription channel, and recycling it
-    /// would drop live DM delivery and force a full UTXO state resync. The win is that fresh
-    /// connections (and every reconnect) never register for blocks in the first place.
-    func unsubscribeBlockAdded(client: String) async {
-        blockAddedClients.remove(client)
-        guard blockAddedClients.isEmpty else { return }
-        await subscriptionManager?.setBlockAddedWanted(false)
-    }
-
     /// Add notification handler
     func addNotificationHandler(_ handler: @escaping (KaspaRPCNotification, Data) -> Void) -> UUID {
         subscriptionManager?.addNotificationHandler(handler) ?? UUID()
@@ -945,16 +920,6 @@ final class NodePoolService: ObservableObject {
     /// answered) - see `UtxoSubscriptionManager.lastHealthyAt`. Nil before the pool has one.
     var subscriptionLastHealthyAt: Date? {
         subscriptionManager?.lastHealthyAt
-    }
-
-    /// Blocks, parsed once on the stream (see `ScannedBlock`). Called off the main actor;
-    /// the scanners take the block to their own serial queues.
-    func addBlockHandler(_ handler: @escaping BlockScanRegistry.Handler) -> UUID {
-        BlockScanRegistry.shared.add(handler)
-    }
-
-    func removeBlockHandler(_ id: UUID) {
-        BlockScanRegistry.shared.remove(id)
     }
 
     /// Remove notification handler

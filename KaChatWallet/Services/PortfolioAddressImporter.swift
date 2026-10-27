@@ -186,7 +186,7 @@ enum PortfolioAddressImporter {
         let complete: Bool
     }
 
-    /// Same endpoint and paging as `ChatService.fetchFullTransactionsPaginated`, but a failing
+    /// Same endpoint and paging as `WalletService.fetchFullTransactionsPaginated`, but a failing
     /// page retries the SAME offset on a growing backoff instead of aborting — and when the
     /// retries are exhausted, whatever was fetched so far is returned (marked incomplete) so the
     /// import can still save the rows it has.
@@ -200,7 +200,7 @@ enum PortfolioAddressImporter {
         var offset = 0
 
         while all.count < maxTransactions {
-            guard let url = await ChatService.shared.kaspaRestURL(
+            guard let url = await WalletService.shared.kaspaRestURL(
                 path: "/addresses/\(address)/full-transactions",
                 queryItems: [
                     URLQueryItem(name: "limit", value: "\(pageSize)"),

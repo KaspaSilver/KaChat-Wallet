@@ -918,7 +918,7 @@ struct ColdStorageDetailView: View {
         var updates: [String: Bool] = [:]
         var failedProbes: Set<String> = []
         for entry in baseEntries where entry.balanceSompi == 0 {
-            let used = await ChatService.shared.spendingAddressUsedState(entry.address)
+            let used = await WalletService.shared.spendingAddressUsedState(entry.address)
             guard loadToken == token else { return }
             if let used {
                 updates[entry.address] = used
@@ -939,7 +939,7 @@ struct ColdStorageDetailView: View {
         }
 
         // Contains-domain tags, after the rows are already visible. refreshIfNeeded is the same
-        // batched KNS lookup ContactsManager.fetchKNSDomainsForAllContacts uses: capped
+        // batched KNS lookup: capped
         // concurrency, per-address debounce and failure cooldown, shared in-flight requests -
         // so re-opening this screen reads warm cache instead of re-firing a request burst.
         let addresses = baseEntries.map { $0.address }
@@ -1256,7 +1256,7 @@ private struct ColdSendFlowView: View {
     }
 
     /// Normal/Fast/Priority multiplier system, same inline (no separate screen) pattern as the
-    /// chatting-address withdraw flow and Manage Addresses' consolidate flow — see
+    /// main-address withdraw flow and Manage Addresses' consolidate flow — see
     /// `WithdrawFeeTier` and `ContactsView`'s withdraw sheet.
     private var extraFeeSompi: UInt64 {
         if let customExtraFeeSompi { return customExtraFeeSompi }
@@ -1456,7 +1456,7 @@ private struct ColdSendFlowView: View {
     }
 
     /// Commits the manually-typed total fee. Values below the tier-computed baseline are clamped
-    /// up to zero extra rather than rejected outright, matching the chatting-address withdraw
+    /// up to zero extra rather than rejected outright, matching the main-address withdraw
     /// flow's identical `commitCustomFee()`.
     private func commitCustomFee() {
         defer { isEditingFee = false }
@@ -2024,7 +2024,7 @@ struct ColdStorageAddressTransactionHistoryView: View {
             }
             .padding(.top, 12)
 
-            // The app's tab look (Chats / Group Chats / Public Chats), not a segmented control.
+            // The app's tab look (`UnderlineTabBar`), not a segmented control.
             UnderlineTabBar(
                 tabs: Tab.allCases.map { (tab: $0, title: tabLabel($0)) },
                 selection: $selectedTab
@@ -2340,7 +2340,7 @@ struct ColdStorageAddressTransactionHistoryView: View {
         isLoading = true
         // Confirmed live against api.kaspa.org that limit=500 works fine in a single call
         // (~0.7s) - cuts this from up to 4 sequential round trips down to 1.
-        let result = await ChatService.shared.fetchFullTransactionsResult(for: entry.address, pageSize: 200, maxTransactions: 200)
+        let result = await WalletService.shared.fetchFullTransactionsResult(for: entry.address, pageSize: 200, maxTransactions: 200)
         // block rewards the chain never accepted paid nothing: not history
         transactions = result.transactions.filter(\.belongsInHistory)
         historyIncomplete = !result.complete
@@ -2538,7 +2538,7 @@ private struct ColdStorageAddressVisibilityView: View {
     /// possibly-wrong "Unused") and the next appearance of the row retries.
     private func ensureUsedLoaded(_ entry: ColdStorageAddressEntry, funded: Bool) async {
         guard !funded, usedByAddress[entry.address] == nil else { return }
-        if let used = await ChatService.shared.spendingAddressUsedState(entry.address) {
+        if let used = await WalletService.shared.spendingAddressUsedState(entry.address) {
             usedByAddress[entry.address] = used
         }
     }

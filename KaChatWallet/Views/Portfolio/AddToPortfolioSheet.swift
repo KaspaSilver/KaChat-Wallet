@@ -3,7 +3,7 @@ import SwiftUI
 /// One on-chain transaction, ready to become a portfolio ledger row.
 ///
 /// Built from a `KaspaFullTransactionResponse` plus the address it was viewed under, so the same
-/// sheet serves cold-storage history, spending-address history and the chatting address without
+/// sheet serves cold-storage history, spending-address history and the main address without
 /// any of them knowing what a portfolio row looks like.
 struct PortfolioCandidateTransaction: Identifiable, Equatable {
     let txId: String

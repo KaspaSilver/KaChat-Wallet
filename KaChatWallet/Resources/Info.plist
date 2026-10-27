@@ -21,8 +21,6 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(KACHAT_BUILD_NUMBER)</string>
-	<key>ChangeNowAPIKey</key>
-	<string>$(CHANGENOW_API_KEY)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>KaChatBuildNumber</key>
@@ -35,8 +33,6 @@
 	<string>Face ID is used to unlock your seed phrase and sign back in, when enabled in Settings.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>KaChat Wallet connects to your local network only if you point it at your own Kaspa node or Nextcloud server.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>KaChat Wallet doesn't record audio and never asks for the microphone.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save QR codes and images you choose to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>
@@ -61,18 +57,5 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UTExportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>KaChat Wallet Tab</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.kachat.wallet.apptab</string>
-		</dict>
-	</array>
 </dict>
 </plist>

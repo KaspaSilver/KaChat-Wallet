@@ -64,25 +64,16 @@ final class BackgroundTaskManager {
 
         let completion = OnceCompletion(task: task)
         let work = Task { @MainActor in
-            // A scheduled post only this phone holds goes out here if its time has come,
-            // whatever the fetch setting says - it is the author's own post, not a fetch.
-            await KaPostsScheduledStore.shared.sendDueLocally()
-            guard !Task.isCancelled else { return false }
-
             // Check if background fetch is enabled in settings
-            guard ChatService.shared.settingsViewModel?.settings.backgroundFetchEnabled == true else {
+            guard WalletService.shared.settingsViewModel?.settings.backgroundFetchEnabled == true else {
                 AppLog.log("%@", "[BackgroundTaskManager] Background fetch disabled, skipping fetch")
                 return true
             }
 
-            if ChatService.chatsEnabled {
-                await ChatService.shared.fetchNewMessages()
-            } else {
-                // KaChat Wallet: no messages - refresh the balance and notify any receive to the
-                // wallet's own addresses that landed while it was closed.
-                _ = try? await WalletManager.shared.refreshBalance(force: true)
-                await AddressActivityNotifier.shared.runCatchUpIfNeeded()
-            }
+            // Refresh the balance and catch up any receive to the wallet's own addresses that
+            // landed while it was closed.
+            _ = try? await WalletManager.shared.refreshBalance(force: true)
+            await AddressActivityNotifier.shared.runCatchUpIfNeeded()
             guard !Task.isCancelled else { return false }
             AppLog.log("%@", "[BackgroundTaskManager] Background fetch completed successfully")
             return true

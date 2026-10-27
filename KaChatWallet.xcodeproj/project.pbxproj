@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		KC0000000000000000000101 /* external/opus/Opus.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = KC0000000000000000000100 /* external/opus/Opus.xcframework */; };
 		KC0000000000000000000201 /* GRPC in Frameworks */ = {isa = PBXBuildFile; productRef = KC0000000000000000000200 /* GRPC */; };
 		KC0000000000000000000211 /* P256K in Frameworks */ = {isa = PBXBuildFile; productRef = KC0000000000000000000210 /* P256K */; };
 		KC0000000000000000000221 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = KC0000000000000000000220 /* SwiftProtobuf */; };
@@ -15,7 +14,6 @@
 
 /* Begin PBXFileReference section */
 		KC0000000000000000000010 /* KaChatWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KaChatWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		KC0000000000000000000100 /* external/opus/Opus.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = external/opus/Opus.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -45,7 +43,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				KC0000000000000000000101 /* external/opus/Opus.xcframework in Frameworks */,
 				KC0000000000000000000201 /* GRPC in Frameworks */,
 				KC0000000000000000000211 /* P256K in Frameworks */,
 				KC0000000000000000000221 /* SwiftProtobuf in Frameworks */,
@@ -75,7 +72,6 @@
 		KC0000000000000000000020 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				KC0000000000000000000100 /* external/opus/Opus.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -197,8 +193,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = RP4Z22SFSD;
 				GENERATE_INFOPLIST_FILE = YES;
-				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64/Headers";
-				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64_x86_64-simulator/Headers";
 				INFOPLIST_FILE = KaChatWallet/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "KaChat Wallet";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
@@ -216,9 +210,8 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG OPUS_BRIDGE $(inherited)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "KaChatWallet/KaChatWallet-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -235,8 +228,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = RP4Z22SFSD;
 				GENERATE_INFOPLIST_FILE = YES;
-				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64/Headers";
-				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/external/opus/Opus.xcframework/ios-arm64_x86_64-simulator/Headers";
 				INFOPLIST_FILE = KaChatWallet/Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "KaChat Wallet";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.board-games";
@@ -254,9 +245,8 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "OPUS_BRIDGE $(inherited)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "KaChatWallet/KaChatWallet-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

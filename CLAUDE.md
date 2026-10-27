@@ -6,13 +6,15 @@ Guidance for Claude Code in this repository.
 
 KaChat Wallet is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
 1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, the .kachat names
-marketplace, Address Book and the whole account Profile (receive, addresses, domains, address book, help, about).
+marketplace, Address Book and the account's Wallet tab (receive, send, addresses, domains, help,
+about).
 
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `b603eb9f`
-(2026-10-24). Most of `KaChatWallet/` is still that code, including features the wallet never
-shows (1:1 and group chats, KaPosts, Public Chats, Chess, Swap, Nextcloud, bots). Calls are gone
-entirely - call code, VoIP push and the WebRTC package were removed on 2026-10-25. They are
-being removed step by step; until then, change only what the wallet uses.
+(2026-10-24). Everything that was not the wallet has been removed (2026-10-25 calls; 2026-10-27
+1:1, group and public chats, KaPosts, Chess, Swap, bots, voice/Opus, the message store, chat push
+and sync, the app-extension data sharing). There is no chat code left: don't bring any back.
+Some names still say "chatting" (`ChattingAddressManageView`, `PaymentRequest.toChattingAddress`):
+that is the main (identity) address, called "Main Address" in the UI.
 
 ## Dock
 
@@ -23,17 +25,34 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) - the home tab |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`) - KaChat's Profile, labelled "Wallet" in the dock with KaPosts' wallet icon (`AppTab.profile`); Address Book (`AddressBookView`, as a sheet) opens from here, and a floating up arrow (bottom right) opens Send Kaspa |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - receive, the Main Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up arrow (bottom right) opens Send Kaspa |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity; hidden in Simple Mode |
 | Settings | `SettingsView(isDockTab: true)` (`Views/Settings/SettingsView.swift`, `AppTab.settings`) - no Done button as a tab; Log Out is its last row |
 
-Account setup is KaChat's: `ContentView` -> `OnboardingView` (create / import a seed) ->
-`MainTabView`. The sign-in screen says "KaChat Wallet" with the wallet logo and no tagline; KaChat's
-welcome guide is not shown.
+Account setup: `ContentView` -> `OnboardingView` (create / import a seed) -> `MainTabView`. The
+sign-in screen says "KaChat Wallet" with the wallet logo and no tagline.
 
-Profile keeps KaChat's whole profile (Receive, Chatting Address, Edit KaChat Profile, Your
-Domains, share link) minus the chat-only parts: Settings has no Chats or Chat History page, and
-Help has only the .kachat names guide. The bell lists wallet and .kachat notifications only.
+The Wallet tab keeps KaChat's profile (Receive, Main Address, Edit KaChat Profile, Your Domains,
+share link); Help has only the .kachat names guide. The bell (`GlobalNotificationCenter`) lists
+"Received" and .kachat notifications.
+
+## Services
+
+- `WalletService` (`Services/WalletService*.swift`): the node connection, the live UTXO
+  subscription to the wallet's own addresses (main, spending, cold storage; re-subscribed when a
+  cold account or a new primary appears), sending (`WalletService+Sending`) and Kaspa REST reads
+  (`WalletService+Transactions`). Live batches go to `AddressActivityNotifier` and a balance
+  refresh; without a subscription a 60s poll refreshes the balance and catches up receives.
+- `WalletManager`: accounts, keys, spending addresses. `AddressBookManager`, `ColdStorageManager`,
+  `PortfolioManager`/`PortfolioViewModel`, `KNSService` and `KachatNames*` as their names say.
+- `NextcloudService`: Address Book backup only. Connect with an app password; the backup is the
+  Address Book export file (`AddressBookManager.ExportFile`, plain JSON with photos) at
+  `KaChat/KaChat Wallet Address Book.json` - never KaChat's `kachat-backup.json`. Automatic
+  Backup (off by default) uploads a few seconds after a change and on background; Restore and a
+  fresh connection merge it back (`importExport`). Address Book and Portfolio import/export can
+  also use the KaChat folder.
+- `AppSettings` (`Models/Models.swift`) holds only wallet settings; a blob from an older build
+  (with KaChat's chat settings) still decodes, every field falling back to its default.
 
 ## Logo
 
@@ -48,10 +67,10 @@ for v in light dark tinted; do python3 tools/make_logo.py KaChatWallet/Resources
 
 ## Identifiers
 
-- Bundle ID `com.kachat.wallet`, App Group `group.com.kachat.wallet`, keychain group
-  `$(AppIdentifierPrefix)com.kachat.wallet`, URL scheme `kachatwallet`, background task
-  `com.kachat.wallet.messageFetch`. None of these are shared with KaChat, so the two apps never
-  read each other's keychain or storage.
+- Bundle ID `com.kachat.wallet`, keychain group `$(AppIdentifierPrefix)com.kachat.wallet`, URL
+  scheme `kachatwallet`, background task `com.kachat.wallet.messageFetch` (the name is historical;
+  it refreshes the balance). None of these are shared with KaChat, so the two apps never read each
+  other's keychain or storage.
 - Team `RP4Z22SFSD` (the KaChat developer's Apple team; the wallet ships under that account)
 - Version: `KaChatWallet/Version.xcconfig` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`)
 
@@ -70,20 +89,6 @@ builds; the owner does all testing. When the owner says "rebuild", build with th
 and install + launch the app in the Simulator, then stop. Device and App Store builds are the
 owner's.
 
-## Chats are off
-
-`ChatService.chatsEnabled` is `false`. ChatService stays only for the node connection and the
-live subscription to the wallet's own addresses (main, spending, cold storage): incoming UTXO
-batches go to `AddressActivityNotifier` ("Received KAS") and a balance refresh, nothing else.
-Every chat path checks the flag and does nothing - handshakes, message sync and fallback
-polling, payments-as-chat, contact sweeps, catch-ups, group live polling and catch-up, KaPosts
-notifications, the unnamed-contact .kachat sweep, the local message load (and its "chat with
-yourself"), extension contact/group syncs, incoming pushes (`handleRemoteNotification` leaves
-them to iOS as plain banners), and background fetch (which refreshes the balance
-and catches up receives instead). The icon never shows a badge. Notifications are only for the
-wallet's own addresses, Cold Storage and .kachat names. The chat code itself still compiles;
-change nothing in it unless removing it.
-
 ## Push
 
 The wallet registers with KaChat's push service for "Received KAS" (its own addresses as
@@ -95,8 +100,10 @@ REST API hasn't resolved yet against the coins the live batches just spent, by o
 registered the app announces a receive only while it is open (the push covers the rest, and the open
 app hides it); the catch-up never re-announces history: only receives newer than each address's floor,
 newest first, up to the balance increase. With Address Activity off it stays registered
-through `primary_address` alone. A `name_event` push has no thread id (the wallet has no
-notification extension); a tap routes by its `type` and `name`. Settings > Notifications has only
+through `primary_address` alone. Registration and updates are signed like KaChat's
+(`PushNotificationManager.buildPushAuth`); the chat fields (`watched_addresses`,
+`watched_group_ids`, aliases) are always empty. A `name_event` push has no thread id (the wallet
+has no notification extension); a tap routes by its `type` and `name`. Settings > Notifications has only
 the Wallet page (Address Activity, sound, vibration). It asks for notification permission once, when
 its tabs first show. Entitlements carry `aps-environment` (development / production). The service
 still has to send on the wallet's topic and skip chat pushes for it: see `PUSH_SERVICE.md`.
@@ -113,5 +120,5 @@ commits, and how to test. Commit and push only that doc there; the indexer sessi
 ## Protocol and servers
 
 Same as KaChat: the node pool for balances and transactions, the Kaspa REST API and CoinGecko for
-Portfolio, the KaChat indexer where KaChat uses it. The protocol and server docs live in
-KaChat-iPhone (`MESSAGING.md`, `KACHAT_NAMES.md`, `PUSH_NOTIFICATIONS.md`).
+Portfolio, the KaChat indexer for push and .kachat names. The protocol and server docs live in
+KaChat-iPhone (`KACHAT_NAMES.md`, `PUSH_NOTIFICATIONS.md`).

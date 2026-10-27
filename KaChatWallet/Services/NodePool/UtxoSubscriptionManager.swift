@@ -49,21 +49,6 @@ final class UtxoSubscriptionManager: ObservableObject {
     /// generation against this and re-sends the subscription when they differ.
     private var primaryConnectionGeneration: Int?
 
-    /// Whether a consumer (e.g. broadcast channel scanning) currently wants block-added
-    /// notifications. Piggybacks on the primary UTXO subscription connection rather than
-    /// opening a second stream; re-registered automatically on every (re)connect of that
-    /// connection, including failover and epoch-change resubscribes.
-    private var wantsBlockAdded = false
-
-    /// Last time an actual block-added push notification arrived (regardless of its content).
-    /// Kaspa produces blocks roughly once a second, so if `wantsBlockAdded` is true and nothing
-    /// has arrived in a while, the node's subscription for it has likely silently expired/dropped
-    /// server-side even though the connection itself still answers pings fine (getInfo has
-    /// nothing to do with whether push notifications are still flowing) - this is used to detect
-    /// that and proactively re-send the subscription request rather than requiring the user to
-    /// force-quit the app to recover.
-    private var lastBlockAddedNotificationAt: Date?
-    private let blockAddedStaleThreshold: TimeInterval = 20
 
     /// Health check timer
     private var healthCheckTask: Task<Void, Never>?
@@ -131,7 +116,7 @@ final class UtxoSubscriptionManager: ObservableObject {
         // Chained, never a wait loop: awaiting a task that has already finished doesn't
         // suspend, so `while let running = subscribeInFlight` spun on the main thread until the
         // finished subscribe's owner cleared it - which needs the main thread. Two subscribes
-        // close together (starting a new chat) froze the app.
+        // close together froze the app.
         let previous = subscribeInFlight
         let task = Task { @MainActor in
             _ = try? await previous?.value
@@ -146,7 +131,7 @@ final class UtxoSubscriptionManager: ObservableObject {
 
     /// Adds addresses on the subscription that is up: the new list goes out on the primary's own
     /// connection. The full path disconnects that connection first - and it is the pooled one
-    /// every other request to the node shares, so starting a chat failed whatever was in flight,
+    /// every other request to the node shares, so a widening failed whatever was in flight,
     /// paid a TLS reconnect and dropped utxosChanged for the gap. Only for a superset: dropping
     /// addresses goes the full way. False when it didn't apply or the node refused.
     private func widenLiveSubscription(to addresses: [String], excluding: Set<String>) async -> Bool {
@@ -319,34 +304,6 @@ final class UtxoSubscriptionManager: ObservableObject {
         notificationHandlers.removeValue(forKey: id)
     }
 
-    /// Enable or disable block-added notifications on the primary connection.
-    /// There is no protocol-level "stop notifying" for block-added, so disabling only
-    /// stops us re-registering on future reconnects - the current connection may keep
-    /// pushing block notifications, which are simply ignored client-side.
-    func setBlockAddedWanted(_ wanted: Bool) async {
-        wantsBlockAdded = wanted
-        guard wanted, state == .subscribed, let conn = primaryConnection else { return }
-        await sendNotifyBlockAdded(on: conn)
-    }
-
-    private func sendNotifyBlockAdded(on conn: GRPCStreamConnection) async {
-        var msg = Protowire_KaspadMessage()
-        msg.notifyBlockAddedRequest = Protowire_NotifyBlockAddedRequestMessage()
-        do {
-            _ = try await conn.sendRequest(
-                msg,
-                type: .notifyBlockAdded,
-                timeout: OperationClass.subscribeUtxosChanged.timeout
-            )
-            // Baseline the staleness clock from here, not from the next actual notification -
-            // otherwise a node that's simply slow for the first block after subscribing would
-            // look "stale" and trigger an immediate, unnecessary re-send.
-            lastBlockAddedNotificationAt = Date()
-        } catch {
-            AppLog.log("[UtxoSub] Failed to register block-added notifications: %@", error.localizedDescription)
-        }
-    }
-
     /// Reconnect to lowest latency node if not already connected to it
     func reconnectToBestNodeIfNeeded() async {
         // Act whenever we're not actively mid-attempt - deliberately NOT gated on
@@ -482,9 +439,6 @@ final class UtxoSubscriptionManager: ObservableObject {
             primaryConnection = conn
             primaryHandlerId = handlerId
             primaryConnectionGeneration = generationAtSubscribe
-            if wantsBlockAdded {
-                await sendNotifyBlockAdded(on: conn)
-            }
         } else {
             standbyConnection = conn
         }
@@ -518,9 +472,6 @@ final class UtxoSubscriptionManager: ObservableObject {
 
     private func handleNotification(_ type: KaspaRPCNotification, data: Data) {
         lastNotificationAt = Date()
-        if type == .blockAdded {
-            lastBlockAddedNotificationAt = Date()
-        }
 
         // Forward to all handlers
         for handler in notificationHandlers.values {
@@ -597,18 +548,6 @@ final class UtxoSubscriptionManager: ObservableObject {
         // with the old stream, and this is the ONLY signal we have (no heartbeat exists for
         // utxosChanged). Re-arm it on the same connection before anything else.
         await resubscribeIfPrimaryReconnected(conn: conn, endpoint: endpoint)
-
-        // The ping above only proves the connection still answers requests - it says nothing
-        // about whether the node is still actually pushing block-added notifications on it. Kaspa
-        // produces a block roughly every second, so total silence for this long while we still
-        // want them means that specific subscription silently died server-side; re-register it.
-        if wantsBlockAdded {
-            let staleness = lastBlockAddedNotificationAt.map { Date().timeIntervalSince($0) } ?? .infinity
-            if staleness > blockAddedStaleThreshold {
-                AppLog.log("[UtxoSub] Block-added notifications stale (%.0fs) - re-registering", staleness)
-                await sendNotifyBlockAdded(on: conn)
-            }
-        }
     }
 
     /// Re-arm the utxosChanged subscription if the primary stream was re-established since we
@@ -636,12 +575,9 @@ final class UtxoSubscriptionManager: ObservableObject {
             // keyed on the GRPCStreamConnection, not the stream), so only the request is re-sent.
             try await sendNotifyUtxosChanged(on: conn)
             primaryConnectionGeneration = liveGeneration
-            if wantsBlockAdded {
-                await sendNotifyBlockAdded(on: conn)
-            }
             AppLog.log("[UtxoSub] utxosChanged subscription re-armed on %@", endpoint.key)
-            // Anything that confirmed during the dead window never reached us - let ChatService
-            // run its catch-up sync (observer of this name; honors push-reliability debounce).
+            // Anything that confirmed during the dead window never reached us - the receive
+            // catch-up (AddressActivityNotifier observes this name) finds it.
             NotificationCenter.default.post(name: .rpcSubscriptionsRestored, object: nil)
         } catch {
             AppLog.log("[UtxoSub] Re-arming subscription on %@ failed: %@ - failing over", endpoint.key, error.localizedDescription)
@@ -755,7 +691,7 @@ final class UtxoSubscriptionManager: ObservableObject {
     // MARK: - State Resync
 
     /// After a failover: what confirmed during the dead window is caught up by the consumers'
-    /// own catch-up (ChatService's debounced sync, AddressActivityNotifier's balance diff), as
+    /// own catch-up (WalletService's debounced sync, AddressActivityNotifier's balance diff), as
     /// when a subscription is re-armed. The node's current UTXO set used to be replayed as a
     /// utxosChanged batch - every old coin arrived as newly "added" (the response's entries share
     /// field 1 with `added`), firing "Received X KAS" for months-old funds and a REST fetch per

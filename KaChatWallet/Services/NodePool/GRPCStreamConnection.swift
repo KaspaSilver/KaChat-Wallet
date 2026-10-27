@@ -131,106 +131,6 @@ struct CircuitBreaker {
 
 /// Actor that manages a single gRPC stream connection to a Kaspa node
 /// Handles request/response matching, timeouts, and circuit breaker pattern
-/// A block as the scanners need it: only the transactions that carry a payload, and of each
-/// only what a KaChat payload scan reads. Built ONCE per block on the stream, in place of the
-/// old path that re-serialized the decoded protobuf into bytes and had every scanner decode
-/// the whole block again - three protobuf passes per block, ten blocks a second, for as long
-/// as any group or room wanted the stream. The single biggest CPU cost in the app.
-struct ScannedBlock: Sendable {
-    struct Transaction: Sendable {
-        let txId: String
-        let blockTime: Int64
-        /// Hex, as the node sends it.
-        let payloadHex: String
-        /// Hex of the first output's script public key - the address a payload with no sender
-        /// field claims (public chats, group control). Only trustworthy once input 0 is shown to
-        /// spend from that same address (XP-012, `PublicChatService.verifiedAuthors`).
-        let firstOutputScriptHex: String
-        /// Input 0's previous outpoint: the coin that was spent, whose address is the real sender.
-        let firstInputTxId: String
-        let firstInputIndex: UInt32
-    }
-    let transactions: [Transaction]
-
-    init(_ notification: Protowire_BlockAddedNotificationMessage) {
-        var kept: [Transaction] = []
-        for tx in notification.block.transactions where !tx.payload.isEmpty {
-            let txId = tx.verboseData.transactionID
-            guard !txId.isEmpty else { continue }
-            let input = tx.inputs.first?.previousOutpoint
-            kept.append(Transaction(
-                txId: txId,
-                // From a node found through peer gossip: clamp, never trap on a value past Int64.
-                blockTime: Int64(clamping: tx.verboseData.blockTime),
-                payloadHex: tx.payload,
-                firstOutputScriptHex: tx.outputs.first?.scriptPublicKey.scriptPublicKey ?? "",
-                firstInputTxId: input?.transactionID ?? "",
-                firstInputIndex: input?.index ?? 0
-            ))
-            // Remembered so a later payload that spends this one's change (a poster's next post)
-            // can be attributed without a lookup.
-            RecentOutputScripts.shared.record(txId: txId, scripts: tx.outputs.map { $0.scriptPublicKey.scriptPublicKey })
-        }
-        transactions = kept
-    }
-}
-
-/// The output scripts of recent payload transactions, by outpoint, so the sender of a public
-/// chat post that spends one (input 0) is known without asking the REST API (XP-012). Bounded:
-/// the oldest are forgotten first.
-final class RecentOutputScripts: @unchecked Sendable {
-    static let shared = RecentOutputScripts()
-    private let lock = NSLock()
-    private var scripts: [String: String] = [:]
-    private var order: [String] = []
-    private let capacity = 20_000
-
-    func record(txId: String, scripts outputScripts: [String]) {
-        lock.lock(); defer { lock.unlock() }
-        for (i, script) in outputScripts.enumerated() where !script.isEmpty {
-            let key = "\(txId.lowercased()):\(i)"
-            if scripts[key] == nil { order.append(key) }
-            scripts[key] = script
-        }
-        if order.count > capacity {
-            let drop = order.count - capacity
-            for key in order.prefix(drop) { scripts[key] = nil }
-            order.removeFirst(drop)
-        }
-    }
-
-    func script(txId: String, index: UInt32) -> String? {
-        lock.lock(); defer { lock.unlock() }
-        return scripts["\(txId.lowercased()):\(index)"]
-    }
-}
-
-/// Where the scanners register for blocks. Lock-protected rather than actor-isolated so the
-/// stream can hand a block over without an actor hop, and the scanners can take it straight
-/// to their own serial queues, as they already do.
-final class BlockScanRegistry: @unchecked Sendable {
-    static let shared = BlockScanRegistry()
-
-    typealias Handler = (ScannedBlock) -> Void
-    private let lock = NSLock()
-    private var handlers: [UUID: Handler] = [:]
-
-    func add(_ handler: @escaping Handler) -> UUID {
-        let id = UUID()
-        lock.lock(); handlers[id] = handler; lock.unlock()
-        return id
-    }
-
-    func remove(_ id: UUID) {
-        lock.lock(); handlers.removeValue(forKey: id); lock.unlock()
-    }
-
-    fileprivate func dispatch(_ block: ScannedBlock) {
-        lock.lock(); let current = Array(handlers.values); lock.unlock()
-        for handler in current { handler(block) }
-    }
-}
-
 actor GRPCStreamConnection {
     // MARK: - Types
 
@@ -268,7 +168,7 @@ actor GRPCStreamConnection {
     /// no request id to correlate on, so FIFO-by-type is the only correlation available. That
     /// is correct only while a single request of a type is outstanding: with two concurrent
     /// ones, whichever response arrives first is handed to whichever request was sent first,
-    /// so the answers cross. Two balance reads issued together (the chatting address and the
+    /// so the answers cross. Two balance reads issued together (the main address and the
     /// spending address, both `getUtxosByAddresses`) could therefore each receive the other's
     /// UTXOs, which is what made the two balances swap on screen.
     ///
@@ -716,12 +616,6 @@ actor GRPCStreamConnection {
                 handleNotification(.utxosChanged, notification)
                 return
 
-            case .blockAddedNotification(let notification):
-                // Scanners get the slim record; the notification path gets an empty payload
-                // so the subscription manager's staleness clock still sees the block.
-                BlockScanRegistry.shared.dispatch(ScannedBlock(notification))
-                handleNotification(.blockAdded, nil)
-                return
 
             // All other notification types
             case .virtualChainChangedNotification,

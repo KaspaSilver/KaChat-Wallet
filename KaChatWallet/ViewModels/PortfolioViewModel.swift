@@ -76,7 +76,7 @@ final class PortfolioViewModel: ObservableObject {
     private var priceHistoryTasks: [Int: Task<Void, Never>] = [:]
     /// Bumped by `cancelPriceHistoryTasks()` (explicit refresh). Each fetch task captures the
     /// epoch at start and refuses to write results or clean up `priceHistoryTasks` once it's
-    /// stale - same epoch pattern the chat send-menu gesture uses for ownership.
+    /// stale.
     private var priceHistoryEpoch = 0
     /// The one in-flight refresh of `sevenDayPriceHistory` (dedup, like `priceHistoryTasks`).
     private var sevenDayHistoryTask: Task<Void, Never>?
@@ -992,9 +992,6 @@ final class PortfolioViewModel: ObservableObject {
         return Set(transactions.filter { $0.sourceTxId == sourceTxId }.map(\.portfolioId))
     }
 
-    /// The key a ChangeNOW swap is recorded under.
-    static func swapSourceTxId(_ swapId: String) -> String { "changenow:\(swapId)" }
-
     /// `sourceAddress`/`sourceTxId` are set when the row came from a real on-chain transaction
     /// (see `AddToPortfolioSheet`), so a later add of the same transaction can be recognised
     /// instead of silently double-counting it.
@@ -1082,8 +1079,7 @@ final class PortfolioViewModel: ObservableObject {
     /// The ledger as last saved, so a save can tell what changed (stamped) and what went.
     private var savedTransactions: [PortfolioTransaction] = []
 
-    /// Saves the ledger: rows added or edited are stamped, rows gone are recorded as deleted, and
-    /// the Nextcloud backup is marked to upload (NEXTCLOUD_SYNC.md section 5, Portfolios).
+    /// Saves the ledger: rows added or edited are stamped, rows gone are recorded as deleted.
     private func persist() {
         let result = PortfolioLedgerStore.stamped(previous: savedTransactions, current: transactions, now: Date()) { $0.updatedAt = $1 }
         if result.items != transactions { transactions = result.items }
@@ -1092,14 +1088,11 @@ final class PortfolioViewModel: ObservableObject {
             walletAddress: activeWalletAddress
         )
         PortfolioLedgerStore.save(transactions, walletAddress: activeWalletAddress)
-        let changed = savedTransactions != transactions
         savedTransactions = transactions
-        if changed { NextcloudService.shared.noteMessageActivity() }
     }
 
     private func persistFees() {
         PortfolioLedgerStore.saveFees(fees, walletAddress: activeWalletAddress)
-        NextcloudService.shared.noteMessageActivity()
     }
 
     /// Re-reads this wallet's ledger after a Nextcloud restore wrote a merged one.

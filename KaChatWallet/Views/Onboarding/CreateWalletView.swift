@@ -102,7 +102,7 @@ struct SeedPhraseExplainerPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 section("The short version",
-                        "A seed phrase is a list of 12 or 24 ordinary words that works as the master key to your account. Your wallet, your chatting address and your messages all come from it.")
+                        "A seed phrase is a list of 12 or 24 ordinary words that works as the master key to your account. Your wallet, its addresses and your .kachat names all come from it.")
                 section("Anyone with it can take everything",
                         "Anyone who has these words can take everything in your account. If you lose them and lose this device, nobody can get your account back, not even KaChat.")
                 section("How to keep it safe",
@@ -343,21 +343,7 @@ private struct CreateWalletSeedStep: View {
     /// Commits the new wallet with the chosen passphrase ("" = none). Called from the passphrase
     /// step. Throwing surfaces the error on that screen and lets the user retry.
     private func commit(passphrase: String) async throws {
-        // Arm the Welcome Guide before committing: `importWallet` (inside commitCreatedWallet) sets
-        // `currentWallet` and suspends at an await, which can mount MainTabView - whose onAppear
-        // consumes this one-shot flag - before control returns here. Setting it first guarantees
-        // the guide appears. Mirrors ImportWalletView.
-        walletManager.justCreatedNewWallet = true
-        // Nothing syncs while the wizard is on screen - see ImportWalletView. A brand-new account
-        // has nothing to sync, but the hold keeps both paths identical and the release honest.
-        ChatService.shared.holdSyncForOnboarding()
-        do {
-            _ = try await walletManager.commitCreatedWallet(seedPhrase: seedPhrase, passphrase: passphrase, alias: alias)
-        } catch {
-            walletManager.justCreatedNewWallet = false
-            ChatService.shared.releaseSyncForOnboarding()
-            throw error
-        }
+        _ = try await walletManager.commitCreatedWallet(seedPhrase: seedPhrase, passphrase: passphrase, alias: alias)
     }
 }
 

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 // The pieces every Send Kaspa screen is built from, so they look and behave the same: the 1:1
-// chat's Send KAS sheet, Profile's Send Kaspa, a spending address's Send, and KasSigner's send.
+// Wallet tab's Send Kaspa, a spending address's Send, and KasSigner's send.
 // Recipient on top (paste, scan a QR, names resolve), then the big amount (KAS or your currency,
 // Max), the fee and balance, the fee speed and coin control, and a slide-to-send button.
 
@@ -326,7 +326,7 @@ struct KaspaAmountEntry: View {
 
 extension KaspaAmountEntry {
     /// Where the device writes the decimal point as "," (de, fr, es, it, pt, ru, tr, id, vi...),
-    /// a comma is ALWAYS the decimal point - "0,001" pasted from a chat is 0.001, never 1 (IOS-078) -
+    /// a comma is ALWAYS the decimal point - "0,001" pasted from a message is 0.001, never 1 (IOS-078) -
     /// and thousands show as a thin space ("2 500"), which no reader takes for a decimal.
     /// Elsewhere thousands show as "," ("12,345.5").
     static func usesCommaDecimal(_ locale: Locale = .current) -> Bool {
@@ -644,7 +644,7 @@ struct SendActionButton: View {
 
 // MARK: - From (which of your addresses a send comes out of)
 
-/// Where a send comes from: the chatting address (every send screen's default), or one of the
+/// Where a send comes from: the main address (every send screen's default), or one of the
 /// spending addresses picked under Choose an Address.
 enum SendSource: Equatable, Hashable {
     case chatting
@@ -695,7 +695,7 @@ struct SelectablePill: View {
 }
 
 /// The From section every send screen starts with, so it is always plain which address the
-/// Kaspa leaves from: Chatting Address (the default) or Choose an Address (any of your
+/// Kaspa leaves from: Main Address (the default) or Choose an Address (any of your
 /// addresses, each marked used or unused), and the chosen address with its balance.
 struct SendFromSection: View {
     @Binding var source: SendSource
@@ -713,7 +713,7 @@ struct SendFromSection: View {
                 .textCase(.uppercase)
             if !isLocked {
                 HStack(spacing: 10) {
-                    SelectablePill(title: "Chatting Address", selected: source == .chatting) {
+                    SelectablePill(title: "Main Address", selected: source == .chatting) {
                         source = .chatting
                     }
                     SelectablePill(title: "Choose an Address", selected: source != .chatting) {
@@ -758,13 +758,13 @@ struct SendFromSection: View {
 
     private var title: String {
         switch source {
-        case .chatting: return AppLocalization.string("Chatting Address")
+        case .chatting: return AppLocalization.string("Main Address")
         case .spending(_, _, let label): return label
         }
     }
 }
 
-/// Your addresses to pick from - the chatting address, then the spending addresses (the ones
+/// Your addresses to pick from - the main address, then the spending addresses (the ones
 /// Manage Addresses shows, plus hidden ones holding Kaspa) - each with its name, balance and
 /// whether it was ever used (a balance means used, else the cached answer, else a history
 /// lookup, eight at a time; "Checking" until answered, never a possibly-wrong "Unused").
@@ -784,8 +784,8 @@ struct OwnAddressPicker: View {
         NavigationStack {
             List {
                 if let chatting = WalletManager.shared.currentWallet {
-                    Section("Chatting Address") {
-                        row(title: AppLocalization.string("Chatting Address"), address: chatting.publicAddress,
+                    Section("Main Address") {
+                        row(title: AppLocalization.string("Main Address"), address: chatting.publicAddress,
                             balance: chatting.balanceSompi) { .chatting }
                     }
                 }
@@ -823,7 +823,7 @@ struct OwnAddressPicker: View {
     }
 
     private func checkUsed(_ shown: [SpendingAddressEntry]) async {
-        let chat = ChatService.shared
+        let chat = WalletService.shared
         var all: [(address: String, balance: UInt64)] = shown.map { ($0.address, $0.balanceSompi) }
         if let wallet = WalletManager.shared.currentWallet {
             all.insert((wallet.publicAddress, wallet.balanceSompi ?? 0), at: 0)

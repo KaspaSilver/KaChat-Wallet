@@ -84,7 +84,7 @@ final class ColdStorageManager: ObservableObject {
     /// Cold storage accounts are watch-only imports, but they must still be scoped per
     /// spending wallet — otherwise switching accounts on this device leaks one wallet's
     /// imported kpubs/labels/hidden-address state into another's view. Mirrors
-    /// ContactsManager.setActiveWalletAddress's key-per-wallet pattern.
+    /// AddressBookManager.setActiveWalletAddress's key-per-wallet pattern.
     func setCurrentWallet(_ walletAddress: String?) {
         let normalizedAddress = normalizeWalletAddress(walletAddress)
         guard activeWalletAddress != normalizedAddress else { return }
@@ -431,7 +431,7 @@ final class ColdStorageManager: ObservableObject {
             if entry.balanceSompi > 0 { continue }
             // Recycle only on a CONFIRMED-unused probe; nil (probe failed) skips the index -
             // extending the chain below is always safe, recycling an unknown one is not.
-            let usedState = await ChatService.shared.spendingAddressUsedState(entry.address)
+            let usedState = await WalletService.shared.spendingAddressUsedState(entry.address)
             if usedState == false {
                 setAddressHidden(accountId: account.id, index: entry.index, hidden: false, balanceSompi: 0)
                 return entry.index
@@ -617,7 +617,7 @@ final class ColdStorageManager: ObservableObject {
 
     /// Permanently deletes this wallet's cold storage data (accounts list plus each
     /// account's labels/hidden-address state), used when a saved account is removed
-    /// from the device entirely. Mirrors GroupChatService.clearAllLocalData().
+    /// from the device entirely.
     func clearAllLocalData() {
         let idsToClear = accounts.map { $0.id }
         if let storageKey {

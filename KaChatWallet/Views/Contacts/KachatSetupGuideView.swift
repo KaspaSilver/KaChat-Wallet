@@ -70,7 +70,7 @@ struct KachatSetupGuideView: View {
         case .claim:
             stepHeader(
                 title: "Claim your .kachat name",
-                subtitle: "It's the name people see you as across KaChat - in chats, on posts and on your profile link. Without one, people see your address."
+                subtitle: "It's the name people see you as across KaChat and on your profile link. Without one, people see your address."
             ) {
                 KachatTabIcon.view(side: 56)
             }
@@ -85,7 +85,7 @@ struct KachatSetupGuideView: View {
                 }
                 .padding(12)
                 .background(fieldBackground)
-                Text("Search for the name you want in Kaspa Hub > .kachat, then claim it.")
+                Text("Search for the name you want in the .kachat tab, then claim it.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -93,7 +93,7 @@ struct KachatSetupGuideView: View {
         case .howItWorks:
             stepHeader(
                 title: "How a name works",
-                subtitle: "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours."
+                subtitle: "Your name lives on the Kaspa network, held by your main address. Nobody can take it or change it while it's yours."
             ) {
                 Image(systemName: "seal.fill")
                     .font(.system(size: 48, weight: .regular))
@@ -115,7 +115,7 @@ struct KachatSetupGuideView: View {
                     .foregroundColor(.accentColor)
             }
             bulletList([
-                "People can find you and message you by typing your name.",
+                "People can find you by typing your name.",
                 "They can send you Kaspa to yourname.kachat instead of a long address.",
                 "Your profile link shows your name."
             ])
@@ -123,7 +123,7 @@ struct KachatSetupGuideView: View {
         case .keepIt:
             stepHeader(
                 title: "Keep it",
-                subtitle: "Your names are in Profile > Your Domains > .kachat."
+                subtitle: "Your names are in Wallet > Your Domains > .kachat."
             ) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 46, weight: .regular))
@@ -138,7 +138,7 @@ struct KachatSetupGuideView: View {
         case .finished:
             stepHeader(
                 title: "You're all set",
-                subtitle: "Claim your name in Kaspa Hub > .kachat whenever you're ready."
+                subtitle: "Claim your name in the .kachat tab whenever you're ready."
             ) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 52, weight: .regular))

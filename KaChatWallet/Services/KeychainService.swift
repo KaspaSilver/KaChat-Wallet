@@ -23,7 +23,6 @@ final class KeychainService {
         case seedPhrase = "kachat_seed_phrase"
         case wallet = "kachat_wallet"
         case privateKey = "kachat_private_key"
-        case groupBag = "kachat_group_bag"
         case nextcloudCredentials = "kachat_nextcloud_credentials"
         case childModePassword = "kachat_child_mode_password"
         /// A random stand-in for the Secure Enclave key hash on hardware that has no Secure
@@ -127,7 +126,7 @@ final class KeychainService {
     // MARK: - Nextcloud (server + app-password credentials, see NextcloudService)
     //
     // Scoped per wallet account: the key name carries the same SHA256(walletAddress).prefix(8)
-    // hex suffix MessageStore uses for its store files, so every account
+    // hex suffix the per-wallet stores use, so every account
     // keeps its own Nextcloud login. Entries are device-local (never iCloud-keychain synced),
     // matching the rest of the app's per-account storage.
 
@@ -188,7 +187,7 @@ final class KeychainService {
         "\(KeychainKey.nextcloudCredentials.rawValue)_\(walletHashSuffix(walletAddress))"
     }
 
-    /// First 8 bytes of SHA256(walletAddress) as hex - the identical derivation MessageStore
+    /// First 8 bytes of SHA256(walletAddress) as hex - the identical derivation KaChat's MessageStore
     /// uses for its per-wallet store file, so all per-wallet storage shares one suffix scheme.
     static func walletHashSuffix(_ walletAddress: String) -> String {
         let hash = SHA256.hash(data: Data(walletAddress.utf8))
@@ -367,7 +366,6 @@ final class KeychainService {
         try? deleteLegacyPrivateKey(includeAccessGroup: false)
         try deleteSecureEnclaveKey()
         clearDeviceIdCache()
-        groupBagCacheLock.withLock { groupBagCache.removeAll() }
     }
 
     func privateKeyStorageStatus() -> String {
@@ -423,68 +421,6 @@ final class KeychainService {
     func deleteAccountSnapshot(publicAddress: String) throws {
         try deleteSensitiveDataForAccount(baseKey: .seedPhrase, publicAddress: publicAddress)
         try deleteSensitiveDataForAccount(baseKey: .privateKey, publicAddress: publicAddress)
-    }
-
-    // MARK: - Group Chat Secrets (Device-specific, SE-wrapped, keyed by groupId)
-    //
-    // GroupBag holds a group's symmetric key material (groupSeed/groupRootEpoch/blindingKey) -
-    // deliberately Keychain-only, never synced anywhere, matching the seed-phrase precedent.
-    // A new device won't auto-restore group membership - the admin has to re-add it directly.
-
-    /// Decoded bags, by group id. `loadGroupBag` is on the group poll's path - every group,
-    /// every tick (5s while a group is open), and again per incoming message - and each uncached
-    /// call is a Keychain read, a Secure Enclave unwrap and a JSON decode, on the main actor
-    /// for its `GroupChatService` callers. The bag only changes through `saveGroupBag` /
-    /// `deleteGroupBag` here, which keep this in step; `clearAll` drops it.
-    private var groupBagCache: [String: GroupBag] = [:]
-    private let groupBagCacheLock = NSLock()
-
-    func saveGroupBag(_ bag: GroupBag) throws {
-        let data = try JSONEncoder().encode(bag)
-        try saveSensitiveDataForGroup(data, baseKey: .groupBag, groupId: bag.groupId)
-        groupBagCacheLock.withLock { groupBagCache[bag.groupId] = bag }
-    }
-
-    func loadGroupBag(groupId: String) throws -> GroupBag? {
-        if let cached = groupBagCacheLock.withLock({ groupBagCache[groupId] }) { return cached }
-        guard let data = try loadSensitiveDataForGroup(baseKey: .groupBag, groupId: groupId) else {
-            return nil
-        }
-        let bag = try JSONDecoder().decode(GroupBag.self, from: data)
-        groupBagCacheLock.withLock { groupBagCache[groupId] = bag }
-        return bag
-    }
-
-    func deleteGroupBag(groupId: String) throws {
-        groupBagCacheLock.withLock { _ = groupBagCache.removeValue(forKey: groupId) }
-        try deleteSensitiveDataForGroup(baseKey: .groupBag, groupId: groupId)
-    }
-
-    private func saveSensitiveDataForGroup(_ data: Data, baseKey: KeychainKey, groupId: String) throws {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        let wrapped = tryWrapPrivateKey(data) ?? data
-        try saveSensitiveDataRaw(wrapped, keyName: keyName)
-    }
-
-    private func loadSensitiveDataForGroup(baseKey: KeychainKey, groupId: String) throws -> Data? {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        guard let data = try loadSensitiveDataRaw(keyName: keyName) else {
-            return nil
-        }
-        if data.starts(with: secureEnclaveHeader) {
-            return try unwrapPrivateKey(data)
-        }
-        return data
-    }
-
-    private func deleteSensitiveDataForGroup(baseKey: KeychainKey, groupId: String) throws {
-        let keyName = try groupScopedKeyName(baseKey: baseKey, groupId: groupId)
-        try deleteSensitiveDataRaw(keyName: keyName)
-    }
-
-    private func groupScopedKeyName(baseKey: KeychainKey, groupId: String) throws -> String {
-        let deviceId = try deviceIdentifier()
-        return "\(baseKey.rawValue).\(deviceId).\(groupId)"
     }
 
     // MARK: - Device-Specific Sensitive Data Storage

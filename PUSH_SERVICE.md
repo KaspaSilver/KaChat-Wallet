@@ -23,8 +23,9 @@ encrypted chat push would show as a bare banner.
 `POST /v1/push/register` and `PUT /v1/push/update`, same shape and signed auth as KaChat, with:
 
 - `platform`: `"ios"`
-- `watched_addresses`: `[]`, `watched_group_ids`: `[]`, `watched_broadcast_channels`: `[]`,
-  `kaposts_pubkey`: null, `kaposts_watch_authors`: `[]` (the wallet has no chats or KaPosts)
+- `watched_addresses`: `[]` and `watched_group_ids`: `[]` (the wallet has no chats; the signed
+  preimage hashes them, and `aliases`, as empty lists). No other chat or KaPosts field is sent:
+  the service's `#[serde(default)]` leaves them empty
 - `primary_address`: the wallet's main address
 - `watch_only_addresses`: the main address, its spending addresses (while their switch is on)
   and the cold-storage addresses whose account notifies - at most 200; empty when the user turns
@@ -32,7 +33,6 @@ encrypted chat push would show as a bare banner.
   `primary_address`)
 - `apns_environment`: `"development"` (Xcode builds) or `"production"` (TestFlight / App Store)
 - **`apns_topic`: `"com.kachat.wallet"`** - new field, see below
-- `voip_token`: null
 
 Older services ignore `apns_topic` (unknown JSON fields are skipped), so this is safe to ship
 before the server change.
@@ -141,7 +141,7 @@ address hash. Not needed to ship.
 1. Deploy the service with `APNS_ALLOWED_TOPICS=com.kachat.app,com.kachat.wallet`.
 2. Install a KaChat Wallet build on a phone, allow notifications on first launch (the wallet asks
    once, when its tabs first show). The log shows
-   `[Push] Registered with indexer, watching N own addresses (+0 chat)`.
+   `[Push] Registered with indexer, watching N own addresses`.
 3. Send KAS to the wallet's address from another wallet, with KaChat Wallet in the background:
    a "Received X KAS" push arrives; tapping it opens that address's history.
 4. Server log: the send uses `topic=com.kachat.wallet`; no `DeviceTokenNotForTopic`.
