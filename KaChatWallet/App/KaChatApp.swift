@@ -444,11 +444,15 @@ extension Notification.Name {
 
 /// What the App Switcher and a system prompt see instead of the app's contents.
 private struct PrivacyCoverView: View {
+    /// The app's appearance (Settings' choice, or the system's): the logo follows it.
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
             Rectangle().fill(.ultraThinMaterial)
-            // The wallet's own logo, rounded like its app icon.
-            Image("KaChatWalletLogo")
+            // The wallet's own logo, rounded like its app icon: the dark-mode icon (near-black
+            // tile, `tools/make_logo.py ... dark`) when the app is dark, the white one otherwise.
+            Image(colorScheme == .dark ? "KaChatWalletLogoDark" : "KaChatWalletLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 72, height: 72)
