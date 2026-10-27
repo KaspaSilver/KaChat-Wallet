@@ -127,8 +127,10 @@ accept a rare stray ping until those coins are spent once.
 ### 4. Optional: one banner per receive
 
 While the wallet is open it shows its own local "Received" notification and hides the push
-banner (it suppresses `funds:` threads in the foreground). Just after it goes to the background
-both can still appear. If the service sent an `apns-collapse-id` for address-activity pushes,
+banner (it suppresses `funds:` threads in the foreground). While it is not open, or for a receive
+that landed while it was away, it posts nothing and leaves the banner to the push (wallet, since
+2026-10-26). Both can still show when the push arrives just after the app closes, for a receive
+the open app already announced. If the service sent an `apns-collapse-id` for address-activity pushes,
 the wallet could give its local notification the same identifier and iOS would show one. The
 service omits it on purpose today (one tx can credit two addresses); a per-(tx, address) id
 would need to fit APNs' 64-byte limit - e.g. the first 48 hex chars of the tx id plus a short

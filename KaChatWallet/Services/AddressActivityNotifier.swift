@@ -26,7 +26,13 @@ import UserNotifications
 /// baseline; increases are attributed via each address's recent transactions with the same
 /// inputs-not-ours filter, falling back to a neutral "Balance increased" notification when
 /// resolution fails. First run just seeds the baseline silently so enabling the feature (or
-/// importing a wallet) never blasts notifications for historical funds.
+/// importing a wallet) never blasts notifications for historical funds. Only receives newer
+/// than the address's floor (the newest block time a catch-up already looked at) count, newest
+/// first and no more than the increase - so older history is never announced again.
+///
+/// With remote push registered, the push service sends "Received" for the same addresses, and
+/// the app hides that push only while it is open (`willPresent`). So the app announces a
+/// receive itself only while it is open; one that landed while it was away was the push's.
 ///
 /// Gated by Settings > Notifications > "Address Activity" (default ON) plus the master
 /// notification mode. Deliberately NOT gated by Simple Mode - Portfolio, Manage Addresses and
@@ -44,6 +50,13 @@ final class AddressActivityNotifier: ObservableObject {
         // balance diff (debounced), never by replaying the UTXO set as new (IOS-070).
         NotificationCenter.default.addObserver(forName: .rpcSubscriptionsRestored, object: nil, queue: .main) { _ in
             Task { @MainActor in await AddressActivityNotifier.shared.runCatchUpIfNeeded() }
+        }
+        activeSince = UIApplication.shared.applicationState == .active ? Date() : nil
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in AddressActivityNotifier.shared.activeSince = Date() }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in AddressActivityNotifier.shared.activeSince = nil }
         }
     }
 
@@ -99,6 +112,12 @@ final class AddressActivityNotifier: ObservableObject {
     /// can still be recognised as our own spend.
     private var recentOwnSpentOutpoints: [String: Date] = [:]
     private static let ownSpentOutpointTTL: TimeInterval = 600
+    /// When the live path last saw a receive to each address - the catch-up's neutral "Balance
+    /// increased" stays quiet for those, since the live path announces that receive itself.
+    private var recentLiveHitAt: [String: Date] = [:]
+    private static let liveHitTTL: TimeInterval = 180
+    /// Since when the app has been open this time (nil while it isn't).
+    private var activeSince: Date?
     private var lastCatchUpAt: Date?
     private var lastCatchUpWallet: String?
 
@@ -200,6 +219,12 @@ final class AddressActivityNotifier: ObservableObject {
         }
         guard !hitsByTx.isEmpty else { return }
 
+        let now = Date()
+        recentLiveHitAt = recentLiveHitAt.filter { now.timeIntervalSince($0.value) < Self.liveHitTTL }
+        for hits in hitsByTx.values {
+            for hit in hits { recentLiveHitAt[hit.address] = now }
+        }
+
         for (txId, hits) in hitsByTx {
             guard !handledTxIds.contains(txId), !inFlightTxIds.contains(txId) else { continue }
             inFlightTxIds.insert(txId)
@@ -245,23 +270,19 @@ final class AddressActivityNotifier: ObservableObject {
             currentBalances[utxo.address, default: 0] += utxo.amount
         }
 
-        var baselines = loadBaselines(wallet: wallet.publicAddress)
+        let baselines = loadBaselines(wallet: wallet.publicAddress)
         let isFirstRun = baselines.isEmpty
-        var changed = false
+        var updates: [String: UInt64] = [:]
 
         for (address, balance) in currentBalances {
             guard let previous = baselines[address] else {
                 // Never-tracked address (feature install, newly revealed slot, fresh cold
-                // import): seed silently - its history predates our tracking.
-                baselines[address] = balance
-                if address == wallet.publicAddress {
-                    // the chatting address's receives count from now on
-                    UserDefaults.standard.set(Date().timeIntervalSince1970 * 1000, forKey: chattingCatchUpFloorKey(address))
-                }
-                changed = true
+                // import): seed silently - its history predates our tracking, and its receives
+                // count from now on.
+                updates[address] = balance
+                setCatchUpFloor(Self.nowMs, address: address, wallet: wallet.publicAddress)
                 continue
             }
-            if balance != previous { changed = true }
             if balance > previous, !isFirstRun, featureEnabled {
                 await attributeAndNotifyIncrease(
                     address: address,
@@ -269,11 +290,16 @@ final class AddressActivityNotifier: ObservableObject {
                     walletAddress: wallet.publicAddress
                 )
             }
-            baselines[address] = balance
+            if balance != previous { updates[address] = balance }
         }
 
-        if changed {
-            saveBaselines(baselines, wallet: wallet.publicAddress)
+        if !updates.isEmpty {
+            // The live path refreshes baselines while this runs - keep a value it wrote meanwhile.
+            var stored = loadBaselines(wallet: wallet.publicAddress)
+            for (address, balance) in updates where stored[address] == baselines[address] {
+                stored[address] = balance
+            }
+            saveBaselines(stored, wallet: wallet.publicAddress)
             NotificationCenter.default.post(name: .ownAddressActivity, object: nil)
         }
     }
@@ -319,7 +345,9 @@ final class AddressActivityNotifier: ObservableObject {
         guard !handledTxIds.contains(txId) else { return }
         markHandled(txId: txId, wallet: walletAddress)
 
-        if !isSelfSend {
+        if !isSelfSend, pushShowsReceive(blockTimeMs: nil) {
+            AppLog.log("[AddressActivity] Receive %@ left to the push (app not open)", String(txId.prefix(12)))
+        } else if !isSelfSend {
             postReceiveNotification(hits: hits, dedupeKey: txId)
             AppLog.log("[AddressActivity] Notified external receive %@ (%d output(s) to own addresses)",
                   String(txId.prefix(12)), hits.count)
@@ -346,50 +374,70 @@ final class AddressActivityNotifier: ObservableObject {
             pageSize: 10,
             maxTransactions: 10
         )
-        // the chatting address: only plain transfers newer than what was already looked at
-        let floorKey = chattingCatchUpFloorKey(walletAddress)
-        let floor = UInt64(max(0, UserDefaults.standard.double(forKey: floorKey)))
-        if isChatting {
-            let newest = recentTxs.compactMap(\.blockTime).max() ?? UInt64(Date().timeIntervalSince1970 * 1000)
-            UserDefaults.standard.set(Double(max(newest, floor)), forKey: floorKey)
-            // the first look only sets where it starts
-            if floor == 0 { return }
+        // Only receives newer than what an earlier catch-up already looked at (or than when the
+        // address started being tracked). An address tracked before floors existed has none
+        // yet: the increase alone bounds it below.
+        let floor = catchUpFloor(address: address, wallet: walletAddress)
+        if let newest = recentTxs.compactMap(\.blockTime).max() {
+            setCatchUpFloor(max(newest, floor ?? 0), address: address, wallet: walletAddress)
         }
+        // The neutral fallback stays quiet when the receive is someone else's to announce: the
+        // live path's (it just saw one here) or the push's (the app was away).
+        let liveSawIt = recentLiveHitAt[address].map { Date().timeIntervalSince($0) < Self.liveHitTTL } ?? false
+        let mayFallBack = !isChatting && !liveSawIt && !pushShowsReceive(blockTimeMs: nil)
 
         guard !recentTxs.isEmpty else {
             // Resolution failed entirely - still surface the funds, neutral wording (not for the
             // chatting address, whose balance moves with every chat payment too).
-            if !isChatting { postBalanceIncreasedNotification(address: address, delta: delta) }
+            if mayFallBack { postBalanceIncreasedNotification(address: address, delta: delta) }
             return
         }
 
+        // Newest first, and only as many receives as the balance grew by: anything older was
+        // already in the baseline. Own change doesn't count against the increase.
+        let newestFirst = recentTxs.sorted { ($0.blockTime ?? .max) > ($1.blockTime ?? .max) }
+        var remaining = delta
         var attributedAny = false
-        for tx in recentTxs {
-            if isChatting {
-                guard Self.isPlainTransfer(tx), (tx.blockTime ?? 0) > floor else { continue }
-            }
+        for tx in newestFirst {
+            guard remaining > 0 else { break }
+            if let floor, let time = tx.blockTime, time <= floor { continue }
+            if isChatting, !Self.isPlainTransfer(tx) { continue }
             let toAddress = tx.outputs
                 .filter { $0.scriptPublicKeyAddress == address }
                 .reduce(UInt64(0)) { $0 + $1.amount }
             guard toAddress > 0 else { continue }
-            if handledTxIds.contains(tx.transactionId) {
-                attributedAny = true
+            attributedAny = true
+            // Already announced, or the live path is on it right now.
+            if handledTxIds.contains(tx.transactionId) || inFlightTxIds.contains(tx.transactionId) {
+                remaining -= min(remaining, toAddress)
                 continue
             }
-            attributedAny = true
             let isSelfSend = await spendsOwnFunds(tx, ownAddresses: ownAll) ?? false
-            guard !handledTxIds.contains(tx.transactionId) else { continue }
+            guard !handledTxIds.contains(tx.transactionId), !inFlightTxIds.contains(tx.transactionId) else { continue }
             markHandled(txId: tx.transactionId, wallet: walletAddress)
-            if !isSelfSend {
-                postReceiveNotification(hits: [(address, toAddress)], dedupeKey: tx.transactionId)
-            }
+            if isSelfSend { continue }
+            remaining -= min(remaining, toAddress)
+            if pushShowsReceive(blockTimeMs: tx.blockTime) { continue }
+            postReceiveNotification(hits: [(address, toAddress)], dedupeKey: tx.transactionId)
         }
 
-        if !attributedAny, !isChatting {
+        if !attributedAny, mayFallBack {
             // Balance grew but none of the fetched recent txs pays this address (deep
             // history page or indexer lag) - neutral fallback rather than staying silent.
             postBalanceIncreasedNotification(address: address, delta: delta)
         }
+    }
+
+    /// Whether the push service already shows this receive, so the app must not: it pushes
+    /// "Received" for the addresses this device registered, and the app hides that push only
+    /// while it is open. A receive from before the app opened this time (or any receive while it
+    /// isn't open) is the push's. `blockTimeMs` nil means it is happening now.
+    private func pushShowsReceive(blockTimeMs: UInt64?) -> Bool {
+        guard AppSettings.load().notificationMode == .remotePush,
+              PushNotificationManager.shared.isRegistered else { return false }
+        guard UIApplication.shared.applicationState == .active, let activeSince else { return true }
+        guard let blockTimeMs else { return false }
+        return Double(blockTimeMs) < activeSince.timeIntervalSince1970 * 1000
     }
 
     // MARK: - Notification posting
@@ -564,10 +612,38 @@ final class AddressActivityNotifier: ObservableObject {
         (tx.payload ?? "").isEmpty
     }
 
-    /// The newest block time (ms) the chatting address's catch-up has already looked at, per
-    /// wallet: older receives were before it was watched, or already notified - never a burst
-    /// of old payments.
-    private func chattingCatchUpFloorKey(_ wallet: String) -> String { "addr_activity_chat_floor_\(wallet.lowercased())" }
+    // MARK: - Catch-up floors (UserDefaults, per wallet)
+
+    /// Per address, the newest block time (ms) a catch-up has already looked at, or when the
+    /// address started being tracked: older receives were before it was watched, or already
+    /// handled - never a burst of old payments.
+    private func catchUpFloorsKey(wallet: String) -> String {
+        "kachat_addr_activity_floors_\(wallet)"
+    }
+
+    private func catchUpFloor(address: String, wallet: String) -> UInt64? {
+        guard let data = UserDefaults.standard.data(forKey: catchUpFloorsKey(wallet: wallet)),
+              let floors = try? JSONDecoder().decode([String: UInt64].self, from: data),
+              let floor = floors[address] else {
+            // The main address's floor used to be kept on its own, set when it was first tracked.
+            guard address == wallet else { return nil }
+            let legacy = UserDefaults.standard.double(forKey: "addr_activity_chat_floor_\(wallet.lowercased())")
+            return legacy > 0 ? UInt64(legacy) : nil
+        }
+        return floor
+    }
+
+    private func setCatchUpFloor(_ floor: UInt64, address: String, wallet: String) {
+        let key = catchUpFloorsKey(wallet: wallet)
+        var floors = UserDefaults.standard.data(forKey: key)
+            .flatMap { try? JSONDecoder().decode([String: UInt64].self, from: $0) } ?? [:]
+        guard floors[address] != floor else { return }
+        floors[address] = floor
+        guard let data = try? JSONEncoder().encode(floors) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private static var nowMs: UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
 
     /// Addresses that count as "ours" when they appear among a tx's INPUTS - superset of the
     /// notifiable set: chatting address + all spending (reserved pool addresses are

@@ -91,7 +91,10 @@ The wallet registers with KaChat's push service for "Received KAS" (its own addr
 `com.kachat.wallet` - no chats, rooms or KaPosts. "Received" is only for Kaspa from someone
 else: a tx with any input from the wallet's own addresses never notifies, including one sent by
 another app on the same seed (KaPosts, KaChat). `AddressActivityNotifier` matches inputs the
-REST API hasn't resolved yet against the coins the live batches just spent, by outpoint. With Address Activity off it stays registered
+REST API hasn't resolved yet against the coins the live batches just spent, by outpoint. With remote push
+registered the app announces a receive only while it is open (the push covers the rest, and the open
+app hides it); the catch-up never re-announces history: only receives newer than each address's floor,
+newest first, up to the balance increase. With Address Activity off it stays registered
 through `primary_address` alone. A `name_event` push has no thread id (the wallet has no
 notification extension); a tap routes by its `type` and `name`. Settings > Notifications has only
 the Wallet page (Address Activity, sound, vibration). It asks for notification permission once, when
