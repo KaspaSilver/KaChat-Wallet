@@ -1158,17 +1158,23 @@ private struct ColdSendFlowView: View {
     @ObservedObject private var portfolioViewModel = PortfolioViewModel.shared
     @StateObject private var fiatAmountState = KaspaFiatAmountState()
 
+    /// After the form (To, Amount, Review): Build, then KasSigner signs it from the QR, the
+    /// signed transaction is scanned back, and the last screen is swipe up to send, as in Send
+    /// Kaspa (the BlockDAG, then Sent or Failed with Try Again).
     private enum Step {
         case form
         case building
         case showingQR(ColdStorageSendEngine.UnsignedColdTx, [Data])
-        case scanning(ColdStorageSendEngine.UnsignedColdTx)
-        case broadcasting
-        case success(String)
+        case scanning(ColdStorageSendEngine.UnsignedColdTx, [Data])
+        case signed(ColdStorageSendEngine.UnsignedColdTx, [Data], KsptCodec.Decoded)
         case failed(String)
     }
 
     @State private var step: Step = .form
+    /// The signed transaction going out (the swipe-up), and how it went.
+    @State private var isBroadcasting = false
+    @State private var broadcastError: String?
+    @State private var sentTransaction: SentTransaction?
     @State private var toAddress = ""
     @State private var isValidAddress = false
     @State private var amountText = ""
@@ -1219,6 +1225,28 @@ private struct ColdSendFlowView: View {
     /// cleared immediately on any change so a stale preview never gets shown or built with.
     @State private var previewSelection: ColdStorageSendEngine.AutomaticSelectionPreview?
     @State private var previewTask: Task<Void, Never>?
+
+    /// The send's steps, as in Send Kaspa: who to, how much (on the app's keypad), and the
+    /// review, where only the fee and coin control change before Build. Compound opens on the
+    /// review (its recipient and amount are set).
+    private enum FormStep: Int { case recipient, amount, review, fee }
+    @State private var formStep: FormStep?
+    @State private var formForward = true
+    @State private var feeDraft = ""
+    private var currentFormStep: FormStep { formStep ?? (isCompoundMode ? .review : .recipient) }
+
+    private func go(to next: FormStep) {
+        dismissSystemKeyboard()
+        formForward = next.rawValue > currentFormStep.rawValue
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { formStep = next }
+        }
+    }
+
+    private var formTransition: AnyTransition {
+        .asymmetric(insertion: .move(edge: formForward ? .trailing : .leading),
+                    removal: .move(edge: formForward ? .leading : .trailing))
+    }
 
     private var amountSompi: UInt64? {
         guard let sompi = KaspaUnit.sompi(fromUserText: amountText), sompi > 0 else { return nil }
@@ -1286,33 +1314,23 @@ private struct ColdSendFlowView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            ZStack {
                 switch step {
                 case .form, .building:
                     formView
-                case .showingQR(let unsignedTx, let frames):
-                    qrView(unsignedTx: unsignedTx, frames: frames)
-                case .scanning:
-                    Color.clear // MultiFrameQRScannerView is presented as its own sheet below
-                case .broadcasting:
-                    VStack(spacing: 16) {
-                        ProgressView()
-                        Text("Broadcasting...")
-                            .foregroundColor(.secondary)
-                    }
-                case .success(let txId):
-                    successView(txId: txId)
+                case .showingQR(let unsignedTx, let frames), .scanning(let unsignedTx, let frames):
+                    // the scanner is its own sheet below, over the QR
+                    qrStep(unsignedTx: unsignedTx, frames: frames)
+                        .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                case .signed(let unsignedTx, let frames, let decoded):
+                    signedStep(unsignedTx: unsignedTx, frames: frames, decoded: decoded)
+                        .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
                 case .failed(let message):
                     failedView(message: message)
                 }
             }
-            .navigationTitle(isCompoundMode ? "Compound UTXOs" : "Send from Cold Storage")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
+            // Every screen draws its own header.
+            .toolbar(.hidden, for: .navigationBar)
             .task {
                 liveFeeRateSompiPerGram = await ColdStorageSendEngine.fetchQuotedFeeRateSompiPerGram()
                 if isCompoundMode {
@@ -1327,7 +1345,7 @@ private struct ColdSendFlowView: View {
                 }
             }
             .sheet(isPresented: isScanningSignedResponse) {
-                if case .scanning(let unsignedTx) = step {
+                if case .scanning(let unsignedTx, _) = step {
                     MultiFrameQRScannerView(isComplete: { KsptCodec.looksLikeKspt($0) }) { data in
                         handleScannedSignedResponse(data, unsignedTx: unsignedTx)
                     }
@@ -1345,104 +1363,20 @@ private struct ColdSendFlowView: View {
     private var isScanningSignedResponse: Binding<Bool> {
         Binding(
             get: { if case .scanning = step { return true } else { return false } },
-            set: { if !$0, case .scanning = step { step = .form } }
+            // closed without a scan: back on the QR
+            set: { if !$0, case .scanning(let tx, let frames) = step { step = .showingQR(tx, frames) } }
         )
     }
 
     private var formView: some View {
-        let isBuilding: Bool = { if case .building = step { return true } else { return false } }()
-        return ScrollView {
-            VStack(spacing: 18) {
-                HStack(spacing: 8) {
-                    SendInfoPill {
-                        HStack(spacing: 4) {
-                            Text("From")
-                            Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
-                                .font(.caption.monospaced())
-                        }
-                    }
-                    SendInfoPill {
-                        HStack(spacing: 4) {
-                            Text("Available")
-                            Text(verbatim: "\(formatKas(availableBalanceSompi)) \(KaspaUnit.symbol)")
-                        }
-                    }
-                }
-
-                SendRecipientCard(
-                    input: $toAddress,
-                    lockedAddress: isCompoundMode ? fromAddress : nil,
-                    isResolving: isResolvingKNS,
-                    resolvedAddress: resolvedAddress,
-                    resolvedName: resolvedDomain,
-                    lookupError: knsError,
-                    isValidAddress: isValidAddress,
-                    onScan: { showRecipientScanner = true },
-                    nameResolutions: nameResolutions,
-                    selectedTLD: selectedTLD,
-                    onSelectResolution: selectResolution
-                )
-                if isCompoundMode {
-                    Group {
-                        if compoundHasMoreRounds {
-                            Text("This address has more than \(KsptCodec.maxInputs) UTXOs. KasSigner can sign at most \(KsptCodec.maxInputs) inputs per transaction, so this merges the largest \(KsptCodec.maxInputs) into one. Run Compound again afterward to keep combining the rest.")
-                        } else {
-                            Text("Merges all of this address's UTXOs into a single one, so future sends need fewer inputs.")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                }
-
-                KaspaAmountEntry(
-                    fiatAmountState: fiatAmountState,
-                    onAmountChange: { amountText = $0 },
-                    isEstimatingMax: isEstimatingMax,
-                    maxEnabled: hasValidRecipient,
-                    onMax: setMaxAmount
-                )
-                .padding(.top, 8)
-
-                // Compound auto-manages its own input set (largest <=8, KasSigner's per-tx limit),
-                // so manual coin control is hidden there - it only applies to a normal send.
-                SendFeeControls(
-                    feeTier: $feeTier,
-                    isEditingFee: $isEditingFee,
-                    customFeeText: $feeEditorText,
-                    isEstimatingFee: false,
-                    feeText: "~\(formatKas(effectiveFeeSompi)) \(KaspaUnit.symbol)",
-                    onStartEditing: {
-                        feeEditorText = formatKas(effectiveFeeSompi)
-                        isEditingFee = true
-                    },
-                    onCommit: commitCustomFee,
-                    showsCoinControl: !isCompoundMode,
-                    coinControlSummary: coinControlSummary(manualUtxos),
-                    onCoinControl: { showCoinControl = true }
-                )
-
-                if case .failed(let message) = step {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                }
-
-                // A tap, not a hold: this only builds the transaction for KasSigner to sign.
-                SendActionButton(
-                    title: "Build Unsigned Transaction",
-                    isBusy: isBuilding,
-                    isEnabled: canBuild,
-                    requiresSlide: false,
-                    action: buildTransaction
-                )
+        ZStack {
+            switch currentFormStep {
+            case .recipient: recipientStep.transition(formTransition)
+            case .amount: amountStep.transition(formTransition)
+            case .review: reviewStep.transition(formTransition)
+            case .fee: feeStep.transition(formTransition)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 24)
         }
-        .scrollDismissesKeyboard(.interactively)
         // The recipient card only shows the lookup; this screen runs it.
         .onChange(of: toAddress) { handleInputChange($0) }
         .onChange(of: amountText) { _ in schedulePreview() }
@@ -1455,6 +1389,200 @@ private struct ColdSendFlowView: View {
         .onChange(of: liveFeeRateSompiPerGram) { _ in schedulePreview() }
     }
 
+    private var screenTitle: LocalizedStringKey {
+        isCompoundMode ? "Compound UTXOs" : "Send from Cold Storage"
+    }
+
+    private var exceedsBalance: Bool {
+        guard let amountSompi else { return false }
+        return amountSompi > availableBalanceSompi
+    }
+
+    private var recipientStep: some View {
+        SendStepScreen(title: Text(screenTitle), onCancel: { dismiss() }, canContinue: hasValidRecipient) {
+            go(to: .amount)
+        } content: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    SendStepQuestion(text: "Who are you sending to?")
+                    SendRecipientCard(
+                        input: $toAddress,
+                        isResolving: isResolvingKNS,
+                        resolvedAddress: resolvedAddress,
+                        resolvedName: resolvedDomain,
+                        lookupError: knsError,
+                        isValidAddress: isValidAddress,
+                        onScan: { showRecipientScanner = true },
+                        nameResolutions: nameResolutions,
+                        selectedTLD: selectedTLD,
+                        onSelectResolution: selectResolution,
+                        focusOnAppear: true
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
+
+    private var amountStep: some View {
+        SendStepScreen(title: Text(screenTitle), onBack: { go(to: .recipient) }, onCancel: { dismiss() },
+                       continueTitle: "Review", canContinue: canBuild && !exceedsBalance && !isEstimatingMax) {
+            go(to: .review)
+        } content: {
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    SendStepChip(label: "To", value: resolvedDomain ?? effectiveAddress, isAddress: resolvedDomain == nil)
+                    SendStepChip(label: "From", value: AppLocalization.string("Cold Storage"))
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                KaspaKeypadAmountEntry(
+                    fiatAmountState: fiatAmountState,
+                    onAmountChange: { amountText = $0 },
+                    isEstimatingMax: isEstimatingMax,
+                    maxEnabled: hasValidRecipient,
+                    footnote: exceedsBalance
+                        ? AppLocalization.string("This is more than the address you're sending from holds.")
+                        : KaspaUnit.label(String(format: AppLocalization.string("Available: %@ KAS"),
+                                                 locale: AppLocalization.locale, formatKas(availableBalanceSompi))),
+                    footnoteIsError: exceedsBalance,
+                    onMax: setMaxAmount
+                )
+            }
+        }
+    }
+
+    private var reviewStep: some View {
+        let isBuilding: Bool = { if case .building = step { return true } else { return false } }()
+        // A tap, not a swipe: this only builds the transaction for KasSigner to sign.
+        return SendStepScreen(title: Text(isCompoundMode ? "Compound UTXOs" : "Review"),
+                              onBack: isCompoundMode ? nil : { go(to: .amount) },
+                              onCancel: { dismiss() },
+                              continueTitle: isBuilding ? "Building..." : "Build Unsigned Transaction",
+                              canContinue: canBuild && !isBuilding) {
+            buildTransaction()
+        } content: {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 6) {
+                        Text(isCompoundMode ? "Consolidating" : "You're sending")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        if let amountSompi {
+                            Text(verbatim: "\(KaspaUnit.plain(amountSompi)) \(KaspaUnit.symbol)")
+                                .font(.system(size: 40, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.5)
+                        } else {
+                            ProgressView().frame(height: 48)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        reviewRow("To") {
+                            if isCompoundMode {
+                                Text("This address (consolidating)")
+                            } else {
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    if let resolvedDomain {
+                                        Text(verbatim: resolvedDomain).fontWeight(.semibold)
+                                    }
+                                    Text(verbatim: effectiveAddress)
+                                        .font(.caption.monospaced())
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                        }
+                        Divider()
+                        reviewRow("From") {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("Cold Storage").fontWeight(.semibold)
+                                Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
+                                    .font(.caption.monospaced())
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Divider()
+                        reviewRow("Total") {
+                            if let amountSompi {
+                                Text(verbatim: "~\(KaspaUnit.plain(amountSompi + effectiveFeeSompi)) \(KaspaUnit.symbol)")
+                                    .fontWeight(.semibold)
+                                    .monospacedDigit()
+                            } else {
+                                Text(verbatim: "—").foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .font(.subheadline)
+                    .padding(14)
+                    .background(sendKaspaGlass(cornerRadius: 20))
+
+                    if isCompoundMode {
+                        Group {
+                            if compoundHasMoreRounds {
+                                Text("This address has more than \(KsptCodec.maxInputs) UTXOs. KasSigner can sign at most \(KsptCodec.maxInputs) inputs per transaction, so this merges the largest \(KsptCodec.maxInputs) into one. Run Compound again afterward to keep combining the rest.")
+                            } else {
+                                Text("Merges all of this address's UTXOs into a single one, so future sends need fewer inputs.")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    }
+
+                    // Compound auto-manages its own input set (largest <=8, KasSigner's per-tx limit),
+                    // so manual coin control is hidden there - it only applies to a normal send.
+                    SendFeeControls(
+                        feeTier: $feeTier,
+                        isEditingFee: $isEditingFee,
+                        customFeeText: $feeEditorText,
+                        isEstimatingFee: false,
+                        feeText: "~\(KaspaUnit.plain(effectiveFeeSompi)) \(KaspaUnit.symbol)",
+                        onStartEditing: {},
+                        onCommit: {},
+                        showsCoinControl: !isCompoundMode,
+                        coinControlSummary: coinControlSummary(manualUtxos),
+                        onCoinControl: { showCoinControl = true },
+                        onEditFee: {
+                            feeDraft = KaspaUnit.plain(effectiveFeeSompi)
+                            go(to: .fee)
+                        }
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+        }
+    }
+
+    private var feeStep: some View {
+        SendFeeEditorScreen(draft: $feeDraft, minimumSompi: defaultFeeSompi,
+                            onCancel: { go(to: .review) }) { typed in
+            // never under the network's minimum
+            customExtraFeeSompi = typed > defaultFeeSompi ? typed - defaultFeeSompi : 0
+            go(to: .review)
+        }
+    }
+
+    private func reviewRow<Value: View>(_ label: LocalizedStringKey, @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .foregroundColor(.secondary)
+            Spacer(minLength: 12)
+            value()
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
     /// Commits the manually-typed total fee. Values below the tier-computed baseline are clamped
     /// up to zero extra rather than rejected outright, matching the main-address withdraw
     /// flow's identical `commitCustomFee()`.
@@ -1464,163 +1592,155 @@ private struct ColdSendFlowView: View {
         customExtraFeeSompi = totalSompi > defaultFeeSompi ? totalSompi - defaultFeeSompi : 0
     }
 
-    /// Literal white background regardless of system dark/light mode — matching this app's
-    /// established convention for any screen showing a QR meant to be read by another device's
-    /// camera (see ChattingAddressQRView/ColdStorageAddressQRView), and a real, plausible fix
-    /// for a scan a KasSigner device failed to read: a dark surrounding background gives a
-    /// phone camera photographing this screen far less contrast/exposure headroom around the
-    /// code than a bright white one does.
-    private func qrView(unsignedTx: ColdStorageSendEngine.UnsignedColdTx, frames: [Data]) -> some View {
-        Color.white
-            .ignoresSafeArea()
-            .overlay(
-                ScrollView {
-                    VStack(spacing: 20) {
-                        // From/Available/Network Fee, matching Android's ColdSendFlow: still
-                        // visible on the QR step, not just the entry form.
-                        VStack(spacing: 8) {
-                            HStack {
-                                Text("From")
-                                Spacer()
-                                Text(fromAddress.prefix(14) + "..." + fromAddress.suffix(6))
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                            HStack {
-                                Text("Available")
-                                Spacer()
-                                Text(verbatim: "\(formatKas(availableBalanceSompi)) \(KaspaUnit.symbol)")
-                            }
-                            HStack {
-                                Text("Network Fee")
-                                Spacer()
-                                Text(verbatim: "\(formatKas(unsignedTx.feeSompi)) \(KaspaUnit.symbol)")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundColor(Color.black.opacity(0.6))
-                        .padding(.horizontal)
-
-                        Text("Scan this on your KasSigner device")
-                            .font(.subheadline)
-                            .foregroundColor(Color.black.opacity(0.6))
-                        AnimatedQRDisplayView(frames: frames, displaySize: 280)
-                        Button {
-                            step = .scanning(unsignedTx)
-                        } label: {
-                            Text("Scan Signed Transaction")
-                                .font(.subheadline.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .foregroundColor(.black)
-                                .background(Capsule().fill(Color.accentColor))
-                        }
-                        .padding(.horizontal)
-                    }
-                    .padding(.vertical, 24)
+    /// Sign: the unsigned transaction as an animated QR for KasSigner, on literal white
+    /// regardless of dark mode - a dark surround gives a camera photographing this screen far
+    /// less contrast around the code (see ChattingAddressQRView/ColdStorageAddressQRView).
+    /// Continue opens the scanner for the signed transaction.
+    private func qrStep(unsignedTx: ColdStorageSendEngine.UnsignedColdTx, frames: [Data]) -> some View {
+        SendStepScreen(title: Text("Sign with KasSigner"), onBack: { withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) { step = .form } },
+                       onCancel: { dismiss() }, continueTitle: "Scan Signed Transaction", canContinue: true) {
+            step = .scanning(unsignedTx, frames)
+        } content: {
+            ScrollView {
+                VStack(spacing: 18) {
+                    SendStepQuestion(text: "Scan this on your KasSigner")
+                    // its own white card (a QR needs the contrast in dark mode too)
+                    AnimatedQRDisplayView(frames: frames, displaySize: 280)
+                    Text("KasSigner shows what it is signing. Check it matches, sign, then scan the signed transaction it shows.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    summaryCard(feeSompi: unsignedTx.feeSompi)
                 }
-            )
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
+            }
+        }
     }
 
-    private func successView(txId: String) -> some View {
-        VStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("From")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(fromAddress)
-                    .font(.system(.subheadline, design: .monospaced))
-                KaspaUnit.text("Available: %@ KAS", formatKas(availableBalanceSompi))
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(glassBackground(cornerRadius: 12))
-
-            VStack(spacing: 12) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.scaled(size: 48))
-                    .foregroundColor(.green)
-                Text("Sent")
-                    .font(.title3)
-                    .fontWeight(.bold)
-            }
-            .padding(.top, 8)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("To")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(toAddress)
-                    .font(.system(.subheadline, design: .monospaced))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(glassBackground(cornerRadius: 12))
-
-            Button {
-                if let url = settingsViewModel.settings.kaspaExplorer.txURL(for: txId) {
-                    UIApplication.shared.open(url)
-                }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text("Transaction ID · tap to view in \(settingsViewModel.settings.kaspaExplorer.displayName)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.caption2)
-                            .foregroundColor(.accentColor)
-                    }
-                    Text(txId)
-                        .font(.system(.subheadline, design: .monospaced))
-                        .foregroundColor(.accentColor)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(16)
-            .background(glassBackground(cornerRadius: 12))
-
-            Spacer(minLength: 0)
-
-            Button {
+    /// Signed and scanned back: the last look, then swipe up to send it - the BlockDAG, then Sent
+    /// with the transaction, or Failed with Try Again (back here, still signed).
+    private func signedStep(unsignedTx: ColdStorageSendEngine.UnsignedColdTx, frames: [Data],
+                            decoded: KsptCodec.Decoded) -> some View {
+        SwipeUpToSendScrollView(
+            screenTitle: isCompoundMode ? "Compound UTXOs" : "Send from Cold Storage",
+            onCancel: { dismiss() },
+            onBack: { step = .showingQR(unsignedTx, frames) },
+            title: isCompoundMode ? "Swipe up to Consolidate" : "Swipe up to Send",
+            isBusy: isBroadcasting,
+            isEnabled: !isBroadcasting && sentTransaction == nil,
+            amountSompi: amountSompi,
+            recipient: isCompoundMode ? nil : (resolvedDomain ?? effectiveAddress),
+            sent: sentTransaction,
+            failureMessage: broadcastError,
+            onDone: {
                 onDone()
                 dismiss()
-            } label: {
-                Text("Done")
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity)
+            },
+            action: { broadcast(unsignedTx: unsignedTx, decoded: decoded) }
+        ) {
+            VStack(spacing: 18) {
+                Label("Signed by KasSigner", systemImage: "checkmark.seal.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.green)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.green.opacity(0.12)))
+                    .padding(.top, 8)
+                VStack(spacing: 6) {
+                    Text(isCompoundMode ? "Consolidating" : "You're sending")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    if let amountSompi {
+                        Text(verbatim: "\(KaspaUnit.plain(amountSompi)) \(KaspaUnit.symbol)")
+                            .font(.system(size: 40, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                summaryCard(feeSompi: unsignedTx.feeSompi)
+                Text("Nothing can change now: this is the transaction KasSigner signed.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 24)
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func failedView(message: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "xmark.circle.fill")
-                .font(.scaled(size: 56))
-                .foregroundColor(.red)
-            Text("Something Went Wrong")
-                .font(.title3)
-                .fontWeight(.semibold)
-            Text(message)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            Button("Try Again") {
-                step = .form
+    /// To, From, the fee and the total, as built.
+    private func summaryCard(feeSompi: UInt64) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            reviewRow("To") {
+                if isCompoundMode {
+                    Text("This address (consolidating)")
+                } else {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if let resolvedDomain {
+                            Text(verbatim: resolvedDomain).fontWeight(.semibold)
+                        }
+                        Text(verbatim: effectiveAddress)
+                            .font(.caption.monospaced())
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
             }
-            .buttonStyle(.borderedProminent)
+            Divider()
+            reviewRow("From") {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Cold Storage").fontWeight(.semibold)
+                    Text(verbatim: "\(fromAddress.prefix(14))...\(fromAddress.suffix(6))")
+                        .font(.caption.monospaced())
+                        .foregroundColor(.secondary)
+                }
+            }
+            Divider()
+            reviewRow("Network Fee") {
+                Text(verbatim: "\(KaspaUnit.plain(feeSompi)) \(KaspaUnit.symbol)")
+                    .monospacedDigit()
+            }
+            if let amountSompi {
+                Divider()
+                reviewRow("Total") {
+                    Text(verbatim: "\(KaspaUnit.plain(amountSompi + feeSompi)) \(KaspaUnit.symbol)")
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                }
+            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .font(.subheadline)
+        .padding(14)
+        .background(sendKaspaGlass(cornerRadius: 20))
+    }
+
+    /// Building failed (or the compound inputs couldn't be read): what went wrong, and Try Again
+    /// back to the form as it was.
+    private func failedView(message: String) -> some View {
+        SendStepScreen(title: Text(screenTitle), onCancel: { dismiss() }, continueTitle: "Try Again", canContinue: true) {
+            step = .form
+        } content: {
+            VStack(spacing: 16) {
+                Spacer(minLength: 40)
+                Image(systemName: "xmark.circle.fill")
+                    .font(.scaled(size: 56))
+                    .foregroundColor(.red)
+                Text("Something Went Wrong")
+                    .font(.title3.weight(.semibold))
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private func handleScannedRecipient(_ code: String) {
@@ -1766,6 +1886,7 @@ private struct ColdSendFlowView: View {
     private func buildTransaction() {
         guard let amountSompi else { return }
         step = .building
+
         let recipient = effectiveAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let overrideRate = feeRateOverride
         // Real coin control (explicit user selection) wins if set; otherwise, if a fresh
@@ -1797,17 +1918,39 @@ private struct ColdSendFlowView: View {
     }
 
     private func handleScannedSignedResponse(_ data: Data, unsignedTx: ColdStorageSendEngine.UnsignedColdTx) {
-        step = .broadcasting
+        guard case .scanning(_, let frames) = step else { return }
+        do {
+            let decoded = try KsptCodec.decode(data)
+            broadcastError = nil
+            sentTransaction = nil
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                step = .signed(unsignedTx, frames, decoded)
+            }
+        } catch {
+            step = .failed(error.localizedDescription)
+        }
+    }
+
+    /// The swipe let go: the signed transaction goes out.
+    private func broadcast(unsignedTx: ColdStorageSendEngine.UnsignedColdTx, decoded: KsptCodec.Decoded) {
+        isBroadcasting = true
+        broadcastError = nil
         Task {
             do {
-                let decoded = try KsptCodec.decode(data)
+                try await SendFailureSimulation.failIfEnabled()
                 let txId = try await ColdStorageSendEngine.shared.broadcastSigned(unsignedTx: unsignedTx, decoded: decoded)
                 await MainActor.run {
-                    step = .success(txId)
+                    isBroadcasting = false
+                    sentTransaction = SentTransaction(
+                        txId: txId,
+                        amountSompi: isCompoundMode ? nil : amountSompi,
+                        recipient: isCompoundMode ? nil : (resolvedDomain ?? effectiveAddress)
+                    )
                 }
             } catch {
                 await MainActor.run {
-                    step = .failed(error.localizedDescription)
+                    isBroadcasting = false
+                    broadcastError = error.localizedDescription
                 }
             }
         }

@@ -39,6 +39,52 @@ The Wallet tab keeps KaChat's profile (Receive, Chatting Address, Edit KaChat Pr
 share link); Help has only the .kachat names guide. The bell (`GlobalNotificationCenter`) lists
 "Received" and .kachat notifications.
 
+## Send Kaspa (and every other send)
+
+Every screen that moves Kaspa is the same steps, built from the shared pieces in
+`Views/Shared/SendKaspaComponents.swift`. Change those pieces, not one screen.
+
+1. **To**: `SendStepScreen` + `SendStepQuestion` ("Who are you sending to?") + `SendRecipientCard`
+   (address or name; Paste, Scan QR and Addresses pills under the field). Cancel sits at the
+   bottom beside Continue (`SendContinueButton`) on a first step; later steps have Back and Cancel
+   in the header (`SendStepHeader`).
+2. **From**: "Where are you sending from?": the Chatting Address and Choose an Address pills;
+   Choose an Address lists your addresses right on the screen (`OwnAddressList`, no sheet).
+   Skipped when the From is fixed (an address's own Send).
+3. **Amount**: `KaspaKeypadAmountEntry`, the app's own number pad (`KaspaKeypad`, `KeypadAmountText`),
+   so no system keyboard covers the screen; "To" and "From" chips, the KAS / currency switch and
+   Max; the From address's balance is the footnote's Available.
+4. **Review**: `SwipeUpToSendScrollView` with Back: the amount, To, From, Total. Nothing can change
+   but the fee and coin control (`SendFeeControls`); a Max amount is worked out again when they
+   change. The fee's Edit (`onEditFee`) opens `SendFeeEditorScreen` (the fee typed on the keypad,
+   never under the network's minimum, warned above ten times it); Confirm goes back to the review.
+
+Where each screen uses them:
+- `WithdrawKaspaView` (`Views/Contacts/ContactsView.swift`): the Wallet tab's Send, an address's
+  Send, the Address Book's, paying a payment request, Compound UTXOs. A pre-filled recipient or a
+  payment request opens on From (a request's amount is fixed: no keypad), Compound on the review.
+- Cold Storage (`ColdSendFlowView`): To, Amount ("To" / "From Cold Storage" chips, `SendStepChip`),
+  Review (fee Edit, Coin Control) ending in Build Unsigned Transaction; then **Sign with KasSigner**
+  (the animated QR, Scan Signed Transaction opens the scanner, closing it returns to the QR) and
+  the **signed** screen ("Signed by KasSigner", the summary) with swipe up to send: the BlockDAG,
+  Sent, or Failed with Try Again (still signed). Compound opens on the review.
+- Manage Addresses' compound (`SpendingAddressWithdrawView`): the review with the fee editor.
+- Request Payment (`CreatePaymentRequestView`, `Views/Shared/PaymentRequestViews.swift`): the same
+  step screens the other way round: "Where do you want to be paid?" (Fresh Address, or Choose an
+  Address with the list right on the screen: `OwnAddressList`, the list `OwnAddressPicker`'s sheet
+  also shows), "How much?" on the keypad, then the review with the memo, Copy Payment Request (the
+  bottom button) and Share.
+- .kachat (`KachatTxSheet`, `Views/Ecosystem/KachatNamesLiveViews.swift`): an entry step when the
+  action takes one (`entryQuestion`: Make an Offer and List / Change Price on the keypad,
+  Transfer on the recipient card), then the review with the fee editor and swipe up
+  (`KachatSwipeUp`; "Swipe up to Confirm" for the rest: delist, release, withdraw, refund, accept,
+  decline). Renew is "How long?" then the review; Buy and Extend are the review. Claiming a name
+  (`KachatClaimSheet`) is "For how long?" (a button per length with its price; a tap goes on),
+  then a costs-only review with the fee's Edit and swipe up to claim. A typed claim fee becomes a
+  rate (`customFeerate`, in proportion to the quote's) that the commit and the register both pay
+  (`PendingRegistration.customFeerate`). Search results say only Available or Taken: no price
+  per year, since a name's first year and later years cost differently.
+
 ## Services
 
 - `WalletService` (`Services/WalletService*.swift`): the node connection, the live UTXO
