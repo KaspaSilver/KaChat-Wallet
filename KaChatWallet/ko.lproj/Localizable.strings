@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "주소 관리가 채팅 주소만 남기고 새로 시작됩니다. 잃는 것은 없습니다: 여기서 어떤 주소든 다시 표시할 수 있고, 그 Kaspa는 총액에 계속 포함됩니다.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "이름은 Kaspa 네트워크에 있으며 채팅 주소가 보유합니다. 내 것인 동안에는 아무도 가져가거나 바꿀 수 없습니다.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "잔액이 부족합니다. 채팅 주소로 최소 1 KAS를 보내 주세요.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "연락처 편집";
+"Delete Contact" = "연락처 삭제";
+"Delete %@ from your contacts?" = "%@을(를) 연락처에서 삭제할까요?";
+"Not in your contacts" = "연락처에 없음";
+"No contacts yet" = "아직 연락처가 없습니다";
+"Add contacts in Wallet > Contacts." = "지갑 > 연락처에서 연락처를 추가하세요.";
+"Nothing to export yet. Add a contact first." = "아직 내보낼 항목이 없습니다. 먼저 연락처를 추가하세요.";
+"Add contacts from a contacts export." = "연락처 내보내기 파일에서 연락처를 추가합니다.";
+"Save your contacts, with their photos, to a file." = "연락처를 사진과 함께 파일로 저장합니다.";
+"Pick a contacts export from your Nextcloud." = "Nextcloud에서 연락처 내보내기 파일을 선택하세요.";
+"Remove Contact Photos" = "연락처 사진 삭제";
+"Remove Contact Photos?" = "연락처 사진을 삭제할까요?";
+"That file isn't a contacts export." = "이 파일은 연락처 내보내기 파일이 아닙니다.";
+"That contacts export has no contacts." = "이 연락처 내보내기 파일에는 연락처가 없습니다.";

@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "تبدأ إدارة العناوين من جديد بعنوان الدردشة فقط. لا يضيع شيء: أعد أي عنوان من هنا، ويبقى رصيده محسوبًا في الإجمالي.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "اسمك موجود على شبكة Kaspa، ويحتفظ به عنوان الدردشة الخاص بك. لا يمكن لأحد أخذه أو تغييره ما دام لك.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "ليس لديك رصيد كافٍ. يرجى إرسال 1 KAS على الأقل إلى عنوان الدردشة الخاص بك.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "تعديل جهة الاتصال";
+"Delete Contact" = "مسح جهة الاتصال";
+"Delete %@ from your contacts?" = "عايز تمسح %@ من جهات الاتصال بتاعتك؟";
+"Not in your contacts" = "مش موجود في جهات الاتصال بتاعتك";
+"No contacts yet" = "مافيش جهات اتصال لسه";
+"Add contacts in Wallet > Contacts." = "ضيف جهات الاتصال من المحفظة > جهات الاتصال.";
+"Nothing to export yet. Add a contact first." = "مافيش حاجة تتصدّر لسه. ضيف جهة اتصال الأول.";
+"Add contacts from a contacts export." = "ضيف جهات اتصال من ملف تصدير جهات الاتصال.";
+"Save your contacts, with their photos, to a file." = "احفظ جهات الاتصال بتاعتك بصورها في ملف.";
+"Pick a contacts export from your Nextcloud." = "اختار ملف تصدير جهات اتصال من Nextcloud بتاعك.";
+"Remove Contact Photos" = "شيل صور جهات الاتصال";
+"Remove Contact Photos?" = "عايز تشيل صور جهات الاتصال؟";
+"That file isn't a contacts export." = "الملف ده مش ملف تصدير جهات اتصال.";
+"That contacts export has no contacts." = "ملف تصدير جهات الاتصال ده مافيهوش جهات اتصال.";

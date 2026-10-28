@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "ניהול כתובות יתחיל מחדש רק עם כתובת הצ׳אט שלך. שום דבר לא אובד: החזירו כל כתובת מכאן, וה-Kaspa שלה ימשיך להיספר בסך הכול.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "השם שלך נמצא ברשת Kaspa ומוחזק על ידי כתובת הצ׳אט שלך. כל עוד הוא שלך, אף אחד לא יכול לקחת או לשנות אותו.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "אין לך מספיק כסף. יש לשלוח לפחות 1 KAS לכתובת הצ'אט שלך.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "עריכת איש קשר";
+"Delete Contact" = "מחיקת איש קשר";
+"Delete %@ from your contacts?" = "למחוק את %@ מאנשי הקשר שלך?";
+"Not in your contacts" = "לא באנשי הקשר שלך";
+"No contacts yet" = "עדיין אין אנשי קשר";
+"Add contacts in Wallet > Contacts." = "אפשר להוסיף אנשי קשר בארנק > אנשי קשר.";
+"Nothing to export yet. Add a contact first." = "עדיין אין מה לייצא. קודם צריך להוסיף איש קשר.";
+"Add contacts from a contacts export." = "הוספת אנשי קשר מקובץ ייצוא של אנשי קשר.";
+"Save your contacts, with their photos, to a file." = "שמירת אנשי הקשר שלך, עם התמונות, בקובץ.";
+"Pick a contacts export from your Nextcloud." = "בחירת קובץ ייצוא של אנשי קשר מה-Nextcloud שלך.";
+"Remove Contact Photos" = "הסרת תמונות אנשי קשר";
+"Remove Contact Photos?" = "להסיר את תמונות אנשי הקשר?";
+"That file isn't a contacts export." = "הקובץ הזה אינו קובץ ייצוא של אנשי קשר.";
+"That contacts export has no contacts." = "בקובץ הייצוא הזה אין אנשי קשר.";

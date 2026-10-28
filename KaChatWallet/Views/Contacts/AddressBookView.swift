@@ -55,7 +55,7 @@ struct AddressBookView: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Address Book")
+            .navigationTitle("Contacts")
             // Large, so the title shows under the bar (the balance holds the bar's middle),
             // as the tabs show their titles.
             .navigationBarTitleDisplayMode(.large)
@@ -128,12 +128,12 @@ struct AddressBookView: View {
     /// What the + offers: add an address, or import / export the whole list.
     private var actionsSheet: some View {
         VStack(spacing: 12) {
-            Text("Addresses")
+            Text("Contacts")
                 .font(.headline)
                 .padding(.top, 20)
                 .padding(.bottom, 4)
             ActionSheetRow(
-                title: "Add Address",
+                title: "Add Contact",
                 subtitle: "Save a Kaspa address with a name you'll recognize.",
                 systemImage: "plus"
             ) {
@@ -142,7 +142,7 @@ struct AddressBookView: View {
             }
             ActionSheetRow(
                 title: "Import File",
-                subtitle: "Add addresses from an Address Book export.",
+                subtitle: "Add contacts from a contacts export.",
                 systemImage: "square.and.arrow.down"
             ) {
                 showImportExport = false
@@ -150,7 +150,7 @@ struct AddressBookView: View {
             }
             ActionSheetRow(
                 title: "Export File",
-                subtitle: "Save this Address Book, with its photos, to a file.",
+                subtitle: "Save your contacts, with their photos, to a file.",
                 systemImage: "square.and.arrow.up"
             ) {
                 showImportExport = false
@@ -159,7 +159,7 @@ struct AddressBookView: View {
             if nextcloud.isConnected {
                 ActionSheetRow(
                     title: "Import from Nextcloud",
-                    subtitle: "Pick an Address Book export from your Nextcloud.",
+                    subtitle: "Pick a contacts export from your Nextcloud.",
                     systemImage: "icloud.and.arrow.down"
                 ) {
                     showImportExport = false
@@ -193,7 +193,7 @@ struct AddressBookView: View {
     /// write or the write fails.
     private func writeExport() -> URL? {
         guard !book.entries.isEmpty else {
-            showToast(AppLocalization.string("Nothing to export yet. Add an address first."), style: .error)
+            showToast(AppLocalization.string("Nothing to export yet. Add a contact first."), style: .error)
             return nil
         }
         do {
@@ -269,10 +269,10 @@ struct AddressBookView: View {
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: "book.closed")
+            Image(systemName: "person.text.rectangle")
                 .font(.system(size: 44))
                 .foregroundColor(.accentColor)
-            Text("No saved addresses")
+            Text("No contacts yet")
                 .font(.headline)
             Text("Save the Kaspa addresses you use with a name you'll recognize. They stay in KaPay, for this wallet only, and never go into your phone's Contacts.")
                 .font(.subheadline)
@@ -281,7 +281,7 @@ struct AddressBookView: View {
             Button {
                 showAdd = true
             } label: {
-                Label("Add Address", systemImage: "plus")
+                Label("Add Contact", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -406,7 +406,7 @@ struct AddressBookEntryDetail: View {
                         Button(role: .destructive) {
                             confirmDelete = true
                         } label: {
-                            Label("Delete from Address Book", systemImage: "trash")
+                            Label("Delete Contact", systemImage: "trash")
                         }
                     }
                 }
@@ -426,7 +426,7 @@ struct AddressBookEntryDetail: View {
                     }
                 }
                 .confirmationDialog(
-                    Text("Delete \(entry.customName ?? AddressBookManager.shared.displayName(for: entry.address)) from your Address Book?"),
+                    Text("Delete \(entry.customName ?? AddressBookManager.shared.displayName(for: entry.address)) from your contacts?"),
                     isPresented: $confirmDelete,
                     titleVisibility: .visible
                 ) {
@@ -437,7 +437,7 @@ struct AddressBookEntryDetail: View {
                 }
             } else {
                 // Deleted (here or by a backup restore) while open.
-                Text("Not in your Address Book")
+                Text("Not in your contacts")
                     .foregroundColor(.secondary)
             }
         }
@@ -609,12 +609,12 @@ struct AddressBookEntryEditor: View {
                             onDone(.removed)
                             dismiss()
                         } label: {
-                            Label("Remove from Address Book", systemImage: "trash")
+                            Label("Delete Contact", systemImage: "trash")
                         }
                     }
                 }
             }
-            .navigationTitle(existing == nil ? "Add to Address Book" : "Edit Address")
+            .navigationTitle(existing == nil ? "Add Contact" : "Edit Contact")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -759,12 +759,12 @@ struct AddressBookPickerSheet: View {
             Group {
                 if book.entries.isEmpty {
                     VStack(spacing: 10) {
-                        Image(systemName: "book.closed")
+                        Image(systemName: "person.text.rectangle")
                             .font(.system(size: 36))
                             .foregroundColor(.secondary)
-                        Text("No saved addresses")
+                        Text("No contacts yet")
                             .font(.headline)
-                        Text("Add addresses in Wallet > Address Book.")
+                        Text("Add contacts in Wallet > Contacts.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -808,7 +808,7 @@ struct AddressBookPickerSheet: View {
                                 prompt: Text("Search names and addresses"))
                 }
             }
-            .navigationTitle("Address Book")
+            .navigationTitle("Contacts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

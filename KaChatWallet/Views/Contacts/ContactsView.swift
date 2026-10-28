@@ -658,7 +658,7 @@ struct ProfileView: View {
             showAddressBook = true
         } label: {
             HStack {
-                Label("Address Book", systemImage: "book.closed")
+                Label("Contacts", systemImage: "person.text.rectangle")
                     .foregroundColor(.primary)
                 Spacer()
                 Image(systemName: "chevron.right")

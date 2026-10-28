@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "«Управление адресами» начнётся заново только с адресом для чатов. Ничего не теряется: верните любой адрес здесь, его Kaspa по-прежнему входят в итог.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Ваше имя живёт в сети Kaspa и принадлежит вашему адресу для чатов. Пока оно ваше, никто не может его забрать или изменить.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "Недостаточно средств. Отправьте не менее 1 KAS на ваш адрес для чата.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Изменить контакт";
+"Delete Contact" = "Удалить контакт";
+"Delete %@ from your contacts?" = "Удалить %@ из контактов?";
+"Not in your contacts" = "Нет в ваших контактах";
+"No contacts yet" = "Пока нет контактов";
+"Add contacts in Wallet > Contacts." = "Добавляйте контакты в разделе Кошелёк > Контакты.";
+"Nothing to export yet. Add a contact first." = "Пока нечего экспортировать. Сначала добавьте контакт.";
+"Add contacts from a contacts export." = "Добавить контакты из экспорта контактов.";
+"Save your contacts, with their photos, to a file." = "Сохранить контакты вместе с фото в файл.";
+"Pick a contacts export from your Nextcloud." = "Выберите экспорт контактов в вашем Nextcloud.";
+"Remove Contact Photos" = "Удалить фото контактов";
+"Remove Contact Photos?" = "Удалить фото контактов?";
+"That file isn't a contacts export." = "Этот файл не является экспортом контактов.";
+"That contacts export has no contacts." = "В этом экспорте контактов нет контактов.";

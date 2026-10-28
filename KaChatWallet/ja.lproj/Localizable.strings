@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "アドレス管理はチャットアドレスだけから始まります。何も失われません。ここから任意のアドレスを戻せ、その Kaspa は合計に含まれたままです。";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "名前は Kaspa ネットワーク上にあり、あなたのチャットアドレスが保有します。あなたのものである間、誰も奪ったり変えたりできません。";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "残高が足りません。チャットアドレスに 1 KAS 以上を送ってください。";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "連絡先を編集";
+"Delete Contact" = "連絡先を削除";
+"Delete %@ from your contacts?" = "%@ を連絡先から削除しますか？";
+"Not in your contacts" = "連絡先にありません";
+"No contacts yet" = "連絡先はまだありません";
+"Add contacts in Wallet > Contacts." = "ウォレット > 連絡先 で連絡先を追加できます。";
+"Nothing to export yet. Add a contact first." = "まだ書き出すものがありません。先に連絡先を追加してください。";
+"Add contacts from a contacts export." = "連絡先の書き出しファイルから連絡先を追加します。";
+"Save your contacts, with their photos, to a file." = "連絡先を写真ごとファイルに保存します。";
+"Pick a contacts export from your Nextcloud." = "Nextcloud から連絡先の書き出しファイルを選んでください。";
+"Remove Contact Photos" = "連絡先の写真を削除";
+"Remove Contact Photos?" = "連絡先の写真を削除しますか？";
+"That file isn't a contacts export." = "このファイルは連絡先の書き出しファイルではありません。";
+"That contacts export has no contacts." = "この連絡先の書き出しファイルには連絡先がありません。";

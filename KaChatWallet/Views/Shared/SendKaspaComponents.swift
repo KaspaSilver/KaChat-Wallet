@@ -67,23 +67,22 @@ struct SendRecipientCard: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($isFocused)
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     inputPill("Paste", systemImage: "doc.on.clipboard") {
                         if let pasted = UIPasteboard.general.string {
                             input = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
                         }
                     }
                     inputPill("Scan QR", systemImage: "qrcode.viewfinder", action: onScan)
-                    if !addressBook.entries.isEmpty {
-                        inputPill("Addresses", systemImage: "book.closed") {
-                            showAddressBook = true
-                        }
+                    // always there, as in KaChat: with no contacts yet it opens on "No contacts yet"
+                    inputPill("Contacts", systemImage: "person.text.rectangle") {
+                        showAddressBook = true
                     }
                     Spacer(minLength: 0)
                 }
                 AddressResolutionCard(address: resolvedAddress ?? (isValidAddress ? trimmed : nil), domain: resolvedName)
                 if let savedName = addressBook.entry(for: resolvedAddress ?? trimmed)?.customName {
-                    Label(savedName, systemImage: "book.closed.fill")
+                    Label(savedName, systemImage: "person.text.rectangle.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundColor(.accentColor)
                 }
@@ -108,7 +107,7 @@ struct SendRecipientCard: View {
         }
     }
 
-    /// Paste, Scan QR, Address Book: a labelled pill under the field.
+    /// Paste, Scan QR, Contacts: a labelled pill under the field.
     private func inputPill(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
             Haptics.impact(.light)
@@ -118,7 +117,9 @@ struct SendRecipientCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.accentColor)
                 .lineLimit(1)
-                .padding(.horizontal, 12)
+                // three to a row on the narrowest phones
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(Capsule().fill(Color.accentColor.opacity(0.15)))
         }

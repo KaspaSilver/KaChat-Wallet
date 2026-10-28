@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "Adresleri Yönet yalnızca sohbet adresinizle yeniden başlar. Hiçbir şey kaybolmaz: herhangi bir adresi buradan geri getirin; Kaspa'sı toplamınızda sayılmaya devam eder.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Adınız Kaspa ağında yaşar ve sohbet adresiniz tarafından tutulur. Sizin olduğu sürece kimse onu alamaz veya değiştiremez.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "Yeterli bakiyeniz yok. Lütfen sohbet adresinize en az 1 KAS gönderin.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Kişiyi düzenle";
+"Delete Contact" = "Kişiyi sil";
+"Delete %@ from your contacts?" = "%@ kişilerinden silinsin mi?";
+"Not in your contacts" = "Kişilerinde değil";
+"No contacts yet" = "Henüz kişi yok";
+"Add contacts in Wallet > Contacts." = "Kişileri Cüzdan > Kişiler bölümünden ekle.";
+"Nothing to export yet. Add a contact first." = "Henüz dışa aktarılacak bir şey yok. Önce bir kişi ekle.";
+"Add contacts from a contacts export." = "Bir kişi dışa aktarımından kişi ekle.";
+"Save your contacts, with their photos, to a file." = "Kişilerini fotoğraflarıyla birlikte bir dosyaya kaydet.";
+"Pick a contacts export from your Nextcloud." = "Nextcloud'undan bir kişi dışa aktarımı seç.";
+"Remove Contact Photos" = "Kişi fotoğraflarını kaldır";
+"Remove Contact Photos?" = "Kişi fotoğrafları kaldırılsın mı?";
+"That file isn't a contacts export." = "Bu dosya bir kişi dışa aktarımı değil.";
+"That contacts export has no contacts." = "Bu kişi dışa aktarımında kişi yok.";

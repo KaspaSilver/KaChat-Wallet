@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository.
 
 KaPay (named KaChat Wallet until 2026-10-27) is a standalone iOS Kaspa wallet, split out of KaChat so KaChat can stay focused on
 1:1 and group chats. It keeps KaChat's wallet features: Portfolio, Cold Storage, the .kachat names
-marketplace, Address Book and the account's Wallet tab (receive, send, addresses, domains, help,
+marketplace, Contacts and the account's Wallet tab (receive, send, addresses, domains, help,
 about).
 
 The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at commit `b603eb9f`
@@ -15,6 +15,11 @@ The source started as a copy of KaChat-iPhone (`KaspaSilver/KaChat-iPhone`) at c
 and sync, the app-extension data sharing). There is no chat code left: don't bring any back.
 The wallet's identity address keeps KaChat's name, "Chatting Address", in code and UI alike: the
 wallet is part of the KaChat ecosystem (owner's call, 2026-10-27). Don't rename it.
+
+Saved addresses are **Contacts** in everything people read (named the Address Book until
+2026-10-28): the Wallet tab's Contacts card, the Contacts pill under a recipient field, Settings >
+Storage's Contact Photos. The code keeps its names (`AddressBookManager`, `AddressBookView`,
+`AddressBookEntry`).
 
 ## Dock
 
@@ -25,7 +30,7 @@ Five fixed tabs (`AppTab` in `KaChatWallet/Models/Models.swift`, rendered by
 |---|---|
 | Portfolio | `PortfolioView` (`Views/Portfolio/`) |
 | Cold Storage | `ColdStorageListView` (`Views/ColdStorage/`) |
-| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - the home tab, where the app opens after logging in; receive, the Chatting Address, Manage Addresses, Your Domains, Address Book (`AddressBookView`, as a sheet), help, about; a floating up/down arrow (bottom right, as in KaChat) opens a half sheet: Send Kaspa, Receive Kaspa, Request Payment (`CreatePaymentRequestView`) |
+| Wallet | `ProfileView` (`Views/Contacts/ContactsView.swift`, `AppTab.profile`) - the home tab, where the app opens after logging in; receive, the Chatting Address, Manage Addresses, Your Domains, Contacts (`AddressBookView`, as a sheet), help, about; a floating up/down arrow (bottom right, as in KaChat) opens a half sheet: Send Kaspa, Receive Kaspa, Request Payment (`CreatePaymentRequestView`) |
 | .kachat | `KachatMarketView` (`Views/Ecosystem/`); dock icon `KachatTabIcon.domainsImage` (name tag with an @) - the full .kachat names marketplace: search, buy, claim, sell, offers, activity |
 | Settings | `SettingsView(isDockTab: true)` (`Views/Settings/SettingsView.swift`, `AppTab.settings`) - no Done button as a tab; Log Out is its last row |
 
@@ -61,7 +66,7 @@ Every screen that moves Kaspa is the same steps, built from the shared pieces in
 
 Where each screen uses them:
 - `WithdrawKaspaView` (`Views/Contacts/ContactsView.swift`): the Wallet tab's Send, an address's
-  Send, the Address Book's, paying a payment request, Compound UTXOs. A pre-filled recipient or a
+  Send, a contact's, paying a payment request, Compound UTXOs. A pre-filled recipient or a
   payment request opens on From (a request's amount is fixed: no keypad), Compound on the review.
 - Cold Storage (`ColdSendFlowView`): To, Amount ("To" / "From Cold Storage" chips, `SendStepChip`),
   Review (fee Edit, Coin Control) ending in Build Unsigned Transaction; then **Sign with KasSigner**
@@ -94,16 +99,16 @@ Where each screen uses them:
   refresh; without a subscription a 60s poll refreshes the balance and catches up receives.
 - `WalletManager`: accounts, keys, spending addresses. `AddressBookManager`, `ColdStorageManager`,
   `PortfolioManager`/`PortfolioViewModel`, `KNSService` and `KachatNames*` as their names say.
-- `NextcloudService`: backs up the Address Book and the Portfolio, nothing else, as two plain
+- `NextcloudService`: backs up Contacts and the Portfolio, nothing else, as two plain
   JSON files in the `KaChat` folder - never KaChat's `kachat-backup.json`:
-  `KaPay Address Book.json` (the Address Book export file, `AddressBookManager.ExportFile`,
+  `KaPay Contacts.json` (the contacts export file, `AddressBookManager.ExportFile`,
   with photos) and `KaPay Portfolio.json` (`PortfolioBackupFile`: portfolios,
-  transactions, fees and deletion tombstones); a restore falls back to the pre-rename
-  `KaChat Wallet …` names. Connect with an app password. Automatic Backup
+  transactions, fees and deletion tombstones); a restore falls back to the earlier names
+  (`KaPay Address Book.json`, then `KaChat Wallet …`). Connect with an app password. Automatic Backup
   (off by default) uploads a few seconds after either changes and on background; a backup merges
   the server's Portfolio in first (`PortfolioSync.merge`, newest edit or deletion wins), so two
   devices don't overwrite each other. Restore and a fresh connection merge both back
-  (`AddressBookManager.importExport`, `PortfolioViewModel.importFromArchive`). Address Book and
+  (`AddressBookManager.importExport`, `PortfolioViewModel.importFromArchive`). Contacts and
   Portfolio import/export can also use the KaChat folder.
 - `KachatNamesRegistry` reads .kachat names through `AppSettings.indexerURL` (Settings >
   Connection > Domains, editable so anyone can run their own indexer; blank = the network's

@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "Gestionar direcciones empieza de nuevo solo con tu dirección de chat. No se pierde nada: recupera cualquier dirección aquí y sus Kaspa siguen contando en tu total.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Tu nombre vive en la red Kaspa, en manos de tu dirección de chat. Nadie puede quitártelo ni cambiarlo mientras sea tuyo.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "No tienes fondos suficientes. Envía al menos 1 KAS a tu dirección de chat.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Editar contacto";
+"Delete Contact" = "Eliminar contacto";
+"Delete %@ from your contacts?" = "¿Eliminar a %@ de tus contactos?";
+"Not in your contacts" = "No está en tus contactos";
+"No contacts yet" = "Aún no hay contactos";
+"Add contacts in Wallet > Contacts." = "Añade contactos en Billetera > Contactos.";
+"Nothing to export yet. Add a contact first." = "Aún no hay nada que exportar. Añade primero un contacto.";
+"Add contacts from a contacts export." = "Añade contactos desde una exportación de contactos.";
+"Save your contacts, with their photos, to a file." = "Guarda tus contactos, con sus fotos, en un archivo.";
+"Pick a contacts export from your Nextcloud." = "Elige una exportación de contactos de tu Nextcloud.";
+"Remove Contact Photos" = "Quitar fotos de contactos";
+"Remove Contact Photos?" = "¿Quitar fotos de contactos?";
+"That file isn't a contacts export." = "Ese archivo no es una exportación de contactos.";
+"That contacts export has no contacts." = "Esa exportación de contactos no tiene contactos.";

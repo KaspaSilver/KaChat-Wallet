@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "You don't have enough funds. Please send at least 1 KAS to your chatting address.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Edit Contact";
+"Delete Contact" = "Delete Contact";
+"Delete %@ from your contacts?" = "Delete %@ from your contacts?";
+"Not in your contacts" = "Not in your contacts";
+"No contacts yet" = "No contacts yet";
+"Add contacts in Wallet > Contacts." = "Add contacts in Wallet > Contacts.";
+"Nothing to export yet. Add a contact first." = "Nothing to export yet. Add a contact first.";
+"Add contacts from a contacts export." = "Add contacts from a contacts export.";
+"Save your contacts, with their photos, to a file." = "Save your contacts, with their photos, to a file.";
+"Pick a contacts export from your Nextcloud." = "Pick a contacts export from your Nextcloud.";
+"Remove Contact Photos" = "Remove Contact Photos";
+"Remove Contact Photos?" = "Remove Contact Photos?";
+"That file isn't a contacts export." = "That file isn't a contacts export.";
+"That contacts export has no contacts." = "That contacts export has no contacts.";

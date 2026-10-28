@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "Quản lý địa chỉ bắt đầu lại chỉ với địa chỉ trò chuyện của bạn. Không mất gì: đưa bất kỳ địa chỉ nào trở lại tại đây, và Kaspa của nó vẫn được tính vào tổng.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Tên của bạn nằm trên mạng Kaspa, do địa chỉ trò chuyện của bạn nắm giữ. Khi còn là của bạn, không ai có thể lấy hay đổi nó.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "Bạn không đủ tiền. Vui lòng gửi ít nhất 1 KAS đến địa chỉ trò chuyện của bạn.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Sửa liên hệ";
+"Delete Contact" = "Xóa liên hệ";
+"Delete %@ from your contacts?" = "Xóa %@ khỏi danh bạ của bạn?";
+"Not in your contacts" = "Không có trong danh bạ của bạn";
+"No contacts yet" = "Chưa có liên hệ nào";
+"Add contacts in Wallet > Contacts." = "Thêm liên hệ trong Ví > Danh bạ.";
+"Nothing to export yet. Add a contact first." = "Chưa có gì để xuất. Hãy thêm một liên hệ trước.";
+"Add contacts from a contacts export." = "Thêm liên hệ từ một bản xuất danh bạ.";
+"Save your contacts, with their photos, to a file." = "Lưu danh bạ của bạn, kèm ảnh, vào một tệp.";
+"Pick a contacts export from your Nextcloud." = "Chọn một bản xuất danh bạ từ Nextcloud của bạn.";
+"Remove Contact Photos" = "Xóa ảnh liên hệ";
+"Remove Contact Photos?" = "Xóa ảnh liên hệ?";
+"That file isn't a contacts export." = "Tệp đó không phải là bản xuất danh bạ.";
+"That contacts export has no contacts." = "Bản xuất danh bạ đó không có liên hệ nào.";

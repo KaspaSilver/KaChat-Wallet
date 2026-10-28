@@ -157,12 +157,14 @@ final class NextcloudService: ObservableObject {
     static let backupFolderName = "KaChat"
     /// The wallet's own files: KaChat's chat backup (`kachat-backup.json`) may share the folder,
     /// and the wallet never touches it.
-    static let addressBookFileName = "KaPay Address Book.json"
+    static let addressBookFileName = "KaPay Contacts.json"
     static let portfolioFileName = "KaPay Portfolio.json"
-    /// The names the backup had while the app was called KaPay (until 2026-10-27).
-    /// Read when there is no backup under the new name yet; the next backup writes the new one.
-    static let legacyAddressBookFileName = "KaChat Wallet Address Book.json"
-    static let legacyPortfolioFileName = "KaChat Wallet Portfolio.json"
+    /// The names the backup had before: "KaPay Address Book.json" (the Address Book became
+    /// Contacts, 2026-10-28) and the KaChat Wallet names (the app's name until 2026-10-27).
+    /// Read, newest first, when there is no backup under the current name yet; the next backup
+    /// writes the current one.
+    static let legacyAddressBookFileNames = ["KaPay Address Book.json", "KaChat Wallet Address Book.json"]
+    static let legacyPortfolioFileNames = ["KaChat Wallet Portfolio.json"]
 
     private init() {
         // No credential load here: state stays empty until WalletManager reports the active
@@ -249,8 +251,8 @@ final class NextcloudService: ObservableObject {
     /// Deletes the Address Book and Portfolio backups from the user's Nextcloud. Only ever on the
     /// user's say-so (the Delete Account option that names it).
     func deleteRemoteBackup() async throws {
-        for name in [Self.addressBookFileName, Self.portfolioFileName,
-                     Self.legacyAddressBookFileName, Self.legacyPortfolioFileName] {
+        for name in [Self.addressBookFileName, Self.portfolioFileName]
+                + Self.legacyAddressBookFileNames + Self.legacyPortfolioFileNames {
             let path = Self.backupPath(name)
             guard let request = authenticatedFileRequest(for: path) else { throw NextcloudError.badCredentials }
             var delete = request
@@ -397,7 +399,7 @@ final class NextcloudService: ObservableObject {
     @discardableResult
     func restoreBackup() async throws -> RestoreResult {
         guard let walletAtStart = currentWalletAddress else { throw NextcloudError.noActiveWallet }
-        let addressBook = try await downloadBackupFile(Self.addressBookFileName, legacy: Self.legacyAddressBookFileName)
+        let addressBook = try await downloadBackupFile(Self.addressBookFileName, legacy: Self.legacyAddressBookFileNames)
         let portfolio = try await downloadPortfolioBackup()
         guard addressBook != nil || portfolio != nil else { throw NextcloudError.backupNotFound }
         guard currentWalletAddress == walletAtStart else { throw CancellationError() }
@@ -416,7 +418,7 @@ final class NextcloudService: ObservableObject {
 
     /// The Portfolio backup on the server, or nil when there is none yet.
     private func downloadPortfolioBackup() async throws -> PortfolioSync? {
-        guard let data = try await downloadBackupFile(Self.portfolioFileName, legacy: Self.legacyPortfolioFileName) else {
+        guard let data = try await downloadBackupFile(Self.portfolioFileName, legacy: Self.legacyPortfolioFileNames) else {
             return nil
         }
         return try PortfolioBackupFile.decode(data).sync
@@ -424,8 +426,8 @@ final class NextcloudService: ObservableObject {
 
     /// A backup file under its name, else under the name it had before the rename; nil when
     /// neither is there.
-    private func downloadBackupFile(_ name: String, legacy: String) async throws -> Data? {
-        for candidate in [name, legacy] {
+    private func downloadBackupFile(_ name: String, legacy: [String]) async throws -> Data? {
+        for candidate in [name] + legacy {
             do {
                 return try await downloadFile(Self.backupPath(candidate), maxBytes: 50_000_000)
             } catch NextcloudError.httpError(404) {
@@ -445,10 +447,12 @@ final class NextcloudService: ObservableObject {
 
     func fetchBackupInfo() async -> BackupInfo {
         guard let listing = try? await listFolder(Self.backupFolderName) else { return BackupInfo() }
-        func file(_ name: String) -> NextcloudFile? { listing.first { $0.name == name && !$0.isDirectory } }
+        func file(_ names: [String]) -> NextcloudFile? {
+            names.lazy.compactMap { name in listing.first { $0.name == name && !$0.isDirectory } }.first
+        }
         return BackupInfo(
-            addressBook: file(Self.addressBookFileName) ?? file(Self.legacyAddressBookFileName),
-            portfolio: file(Self.portfolioFileName) ?? file(Self.legacyPortfolioFileName)
+            addressBook: file([Self.addressBookFileName] + Self.legacyAddressBookFileNames),
+            portfolio: file([Self.portfolioFileName] + Self.legacyPortfolioFileNames)
         )
     }
 

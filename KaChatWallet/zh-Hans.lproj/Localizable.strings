@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "「管理地址」将重新开始，只保留你的聊天地址。不会丢失任何东西：可在此恢复任意地址，其 Kaspa 仍计入总额。";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "你的名称存在于 Kaspa 网络上，由你的聊天地址持有。只要归你所有，谁也不能拿走或更改。";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "你的余额不足。请向你的聊天地址发送至少 1 KAS。";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "编辑联系人";
+"Delete Contact" = "删除联系人";
+"Delete %@ from your contacts?" = "要从联系人中删除 %@ 吗？";
+"Not in your contacts" = "不在你的联系人中";
+"No contacts yet" = "还没有联系人";
+"Add contacts in Wallet > Contacts." = "在 钱包 > 联系人 中添加联系人。";
+"Nothing to export yet. Add a contact first." = "还没有可导出的内容。请先添加一个联系人。";
+"Add contacts from a contacts export." = "从联系人导出文件添加联系人。";
+"Save your contacts, with their photos, to a file." = "将你的联系人及其照片保存到文件。";
+"Pick a contacts export from your Nextcloud." = "从你的 Nextcloud 选择一个联系人导出文件。";
+"Remove Contact Photos" = "移除联系人照片";
+"Remove Contact Photos?" = "要移除联系人照片吗？";
+"That file isn't a contacts export." = "该文件不是联系人导出文件。";
+"That contacts export has no contacts." = "该联系人导出文件中没有联系人。";

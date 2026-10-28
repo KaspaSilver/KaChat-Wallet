@@ -136,7 +136,7 @@ struct SettingsView: View {
             // Cache, whose "clear" must never delete anything you'd miss.
             Section {
                 HStack {
-                    Label("Address Book Photos", systemImage: "book.closed")
+                    Label("Contact Photos", systemImage: "person.text.rectangle")
                     Spacer()
                     if let bytes = addressBookPhotoBytes {
                         Text(CacheManager.formatted(bytes))
@@ -150,19 +150,19 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         confirmRemoveAddressBookPhotos = true
                     } label: {
-                        Text("Remove Address Book Photos")
+                        Text("Remove Contact Photos")
                             .foregroundColor(.red)
                     }
                 }
             } header: {
                 Text("On This Device")
             } footer: {
-                Text("Photos you assigned to saved addresses, for every wallet on this device. They're kept until you remove them, and they're included in your Address Book backup.")
+                Text("Photos you assigned to contacts, for every wallet on this device. They're kept until you remove them, and they're included in your contacts backup.")
             }
             .task { await refreshAddressBookPhotoBytes() }
             .sheet(isPresented: $confirmRemoveAddressBookPhotos) {
                 ConfirmActionSheet(
-                    title: AppLocalization.string("Remove Address Book Photos?"),
+                    title: AppLocalization.string("Remove Contact Photos?"),
                     confirmTitle: AppLocalization.string("Remove"),
                     confirmSubtitle: String(
                         format: AppLocalization.string("Frees %@. Saved addresses keep their names; they show the avatar their owner set instead."),
@@ -192,7 +192,7 @@ struct SettingsView: View {
             } header: {
                 Text("Backup")
             } footer: {
-                Text("Back up your Address Book and Portfolio to the KaChat folder on your own Nextcloud server. Nothing is stored in iCloud.")
+                Text("Back up your contacts and Portfolio to the KaChat folder on your own Nextcloud server. Nothing is stored in iCloud.")
             }
         }
         .navigationTitle("Storage")
@@ -470,7 +470,7 @@ struct DiagnosticsSettingsPage: View {
                                 ProgressView()
                             }
                         }
-                        Text("Exports the app version, iOS version, the wallet's settings and connection state, the Kaspa node pool and the last day of the app's own logs as a zip, for troubleshooting with support. No private keys, seed phrases, addresses, Address Book entries or portfolios are included.")
+                        Text("Exports the app version, iOS version, the wallet's settings and connection state, the Kaspa node pool and the last day of the app's own logs as a zip, for troubleshooting with support. No private keys, seed phrases, addresses, contacts or portfolios are included.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
@@ -2856,7 +2856,7 @@ struct NextcloudSettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        backupFileRow("Address Book", file: backupInfo.addressBook)
+                        backupFileRow("Contacts", file: backupInfo.addressBook)
                         backupFileRow("Portfolio", file: backupInfo.portfolio)
                     }
 
@@ -2873,7 +2873,7 @@ struct NextcloudSettingsView: View {
                 } header: {
                     Text("Backup")
                 } footer: {
-                    Text("Your Address Book (names, notes and photos) is saved as \"\(NextcloudService.addressBookFileName)\" and your portfolios with their transactions as \"\(NextcloudService.portfolioFileName)\", both in the \(NextcloudService.backupFolderName) folder. Automatic Backup uploads them a few seconds after you change either. Restoring merges the backup into this device: no address is deleted, and a portfolio or transaction deleted on another device is removed here too. Connecting a wallet to a server that has a backup restores it once by itself.")
+                    Text("Your contacts (names, notes and photos) are saved as \"\(NextcloudService.addressBookFileName)\" and your portfolios with their transactions as \"\(NextcloudService.portfolioFileName)\", both in the \(NextcloudService.backupFolderName) folder. Automatic Backup uploads them a few seconds after you change either. Restoring merges the backup into this device: no address is deleted, and a portfolio or transaction deleted on another device is removed here too. Connecting a wallet to a server that has a backup restores it once by itself.")
                 }
 
                 Section {
@@ -2903,7 +2903,7 @@ struct NextcloudSettingsView: View {
                 } header: {
                     Text("Server")
                 } footer: {
-                    Text("Connect your own Nextcloud to back up your Address Book and Portfolio to its KaChat folder. Create an app password in Nextcloud under Settings → Security → Devices & sessions — don't use your account password. It is stored in the device Keychain.")
+                    Text("Connect your own Nextcloud to back up your contacts and Portfolio to its KaChat folder. Create an app password in Nextcloud under Settings → Security → Devices & sessions — don't use your account password. It is stored in the device Keychain.")
                 }
 
                 if let errorMessage {
@@ -2945,7 +2945,7 @@ struct NextcloudSettingsView: View {
             Button("Restore") { restore() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The Address Book and Portfolio from the backup are merged into this device. No address is deleted; portfolios and transactions deleted on another device are removed here too.")
+            Text("Your contacts and Portfolio from the backup are merged into this device. No contact is deleted; portfolios and transactions deleted on another device are removed here too.")
         }
         .task(id: service.account?.serverURLString) {
             guard service.isConnected else { return }
@@ -2962,7 +2962,7 @@ struct NextcloudSettingsView: View {
             do {
                 try await NextcloudService.shared.runBackup()
                 backupInfo = await NextcloudService.shared.fetchBackupInfo()
-                backupStatusMessage = AppLocalization.string("Address Book and Portfolio backed up.")
+                backupStatusMessage = AppLocalization.string("Contacts and Portfolio backed up.")
             } catch {
                 backupErrorMessage = UserFacingError.message(for: error)
             }
@@ -3011,7 +3011,7 @@ struct NextcloudSettingsView: View {
         }
         var parts: [String] = []
         if result.addresses > 0 {
-            parts.append(String(format: AppLocalization.string("Address Book: %lld added, %lld updated."), result.addressesAdded, result.addressesUpdated))
+            parts.append(String(format: AppLocalization.string("Contacts: %lld added, %lld updated."), result.addressesAdded, result.addressesUpdated))
         }
         if result.portfolioChanged {
             parts.append(AppLocalization.string("Portfolio restored."))
@@ -3136,7 +3136,7 @@ struct CacheSettingsPage: View {
             ConfirmActionSheet(
                 title: "Clear All Cache?",
                 confirmTitle: "Clear All",
-                confirmSubtitle: "Frees \(CacheManager.formatted(cache.totalBytes)). Your Address Book and keys are not touched.",
+                confirmSubtitle: "Frees \(CacheManager.formatted(cache.totalBytes)). Your contacts and keys are not touched.",
                 confirmSystemImage: "trash"
             ) {
                 Task { await cache.clearAll() }

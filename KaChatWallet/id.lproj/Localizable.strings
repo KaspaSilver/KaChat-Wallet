@@ -1620,3 +1620,19 @@
 "Manage Addresses starts over with only your chatting address. Nothing is lost: bring any address back here, and its Kaspa still counts in your total." = "Kelola Alamat dimulai ulang hanya dengan alamat obrolan Anda. Tidak ada yang hilang: tampilkan lagi alamat mana pun di sini, dan Kaspa-nya tetap dihitung dalam total Anda.";
 "Your name lives on the Kaspa network, held by your chatting address. Nobody can take it or change it while it's yours." = "Nama Anda ada di jaringan Kaspa, dipegang oleh alamat obrolan Anda. Selama milik Anda, tak ada yang bisa mengambil atau mengubahnya.";
 "You don't have enough funds. Please send at least 1 KAS to your chatting address." = "Dana Anda tidak cukup. Kirim setidaknya 1 KAS ke alamat chat Anda.";
+
+/* Contacts (the Address Book, renamed 2026-10-28) */
+"Edit Contact" = "Edit kontak";
+"Delete Contact" = "Hapus kontak";
+"Delete %@ from your contacts?" = "Hapus %@ dari kontakmu?";
+"Not in your contacts" = "Tidak ada di kontakmu";
+"No contacts yet" = "Belum ada kontak";
+"Add contacts in Wallet > Contacts." = "Tambahkan kontak di Dompet > Kontak.";
+"Nothing to export yet. Add a contact first." = "Belum ada yang bisa diekspor. Tambahkan kontak dulu.";
+"Add contacts from a contacts export." = "Tambahkan kontak dari ekspor kontak.";
+"Save your contacts, with their photos, to a file." = "Simpan kontakmu beserta fotonya ke sebuah file.";
+"Pick a contacts export from your Nextcloud." = "Pilih ekspor kontak dari Nextcloud-mu.";
+"Remove Contact Photos" = "Hapus foto kontak";
+"Remove Contact Photos?" = "Hapus foto kontak?";
+"That file isn't a contacts export." = "File itu bukan ekspor kontak.";
+"That contacts export has no contacts." = "Ekspor kontak itu tidak berisi kontak.";
