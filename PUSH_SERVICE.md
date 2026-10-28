@@ -2,7 +2,7 @@
 
 Handoff for the KaChat push service (`kachat-indexer/kasia-indexer`, `indexer/src/push.rs` and
 `indexer/src/api/v1/push.rs`), the same service and URL KaChat uses (default
-`https://kachat.duckdns.org`). KaChat Wallet is a separate iOS app, bundle id
+`https://indexer.kachat.app`). KaChat Wallet is a separate iOS app, bundle id
 **`com.kachat.wallet`**, on the same Apple team as KaChat (`RP4Z22SFSD`).
 
 ## What the wallet wants pushed

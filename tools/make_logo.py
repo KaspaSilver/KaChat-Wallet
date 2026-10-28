@@ -1,4 +1,4 @@
-"""Draws the KaChat Wallet logo and app icons: a teal wallet with Kaspa's backward K in the middle.
+"""Draws the KaChat Wallet logo and app icons: a teal wallet with KaChat's backward K in the middle.
 
 Usage: python3 tools/make_logo.py OUT.png [SIZE] [VARIANT]
 
@@ -69,13 +69,23 @@ img.paste(grad, (0, 0), mask)
 d.rounded_rectangle(p(690, 465, 899, 625), radius=56 * S, fill=ACCENT)
 d.ellipse(p(752, 521, 800, 569), fill=MARK + (255,))
 
-# Kaspa's backward K, centred on the wallet: a slightly leaning bar with a ">" pointing into it.
+# KaChat's backward K (measured off KaChat's app icon, in its 1024 px coordinates): a bar bent
+# into a slight ">" and two thick arms meeting in a "<" against it. Scaled and centred on the
+# wallet body.
+K_CENTRE = (513, 471)
+K_SCALE = 0.76
+K_AT = (500, 545)
+K_SHAPES = [
+    [(556, 267), (636, 255), (666, 471), (636, 687), (557, 675), (586, 471)],  # bar
+    [(408, 293), (637, 471), (506, 471), (361, 355)],                          # upper arm
+    [(408, 649), (637, 471), (506, 471), (361, 587)],                          # lower arm
+]
 mark = MARK + (255,)
-d.polygon(p(572, 402, 632, 398, 617, 690, 557, 694), fill=mark)  # bar
-stroke = 60
-d.line(p(390, 428, 572, 546), fill=mark, width=stroke * S)       # upper arm
-d.line(p(390, 664, 572, 546), fill=mark, width=stroke * S)       # lower arm
-d.polygon(p(542, 512, 584, 546, 542, 580, 512, 546), fill=mark)  # fills the arms' join
+for shape in K_SHAPES:
+    pts = []
+    for x, y in shape:
+        pts += [K_AT[0] + (x - K_CENTRE[0]) * K_SCALE, K_AT[1] + (y - K_CENTRE[1]) * K_SCALE]
+    d.polygon(p(*pts), fill=mark)
 
 img = img.resize((size, size), Image.LANCZOS)
 if variant != "logo":

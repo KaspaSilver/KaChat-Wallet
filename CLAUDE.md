@@ -68,7 +68,7 @@ share link); Help has only the .kachat names guide. The bell (`GlobalNotificatio
 
 ## Logo
 
-`tools/make_logo.py` draws the logo and the app icons (teal wallet, Kaspa's backward K in the
+`tools/make_logo.py` draws the logo and the app icons (teal wallet, KaChat's backward K - the same shape as KaChat's icon - in the
 middle). Variants: `logo` (white rounded square, the in-app `KaChatWalletLogo` image, 512 px) and
 the 1024 px app icons `light` (white), `dark` (near-black) and `tinted` (grayscale on black):
 

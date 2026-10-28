@@ -50,23 +50,20 @@ private final class AppSettingsCache: @unchecked Sendable {
 
 /// Extension to load settings from any context (not MainActor-isolated)
 extension AppSettings {
-    /// Retired indexer defaults - `indexer.kasia.fyi` (offline) and the community
-    /// `indexer.kasia.wtf` - now replaced by KaChat's own indexer.
-    private static let legacyIndexerURLs = ["https://indexer.kasia.fyi", "https://indexer.kasia.wtf"]
-
     /// Load settings from UserDefaults (can be called from any context). Cached - see
     /// `AppSettingsCache`.
     static func load() -> AppSettings {
         if let cached = AppSettingsCache.shared.get() { return cached }
         guard let data = UserDefaults.standard.data(forKey: "kachat_app_settings"),
-              var settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
+              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
             AppSettingsCache.shared.set(.default)
             return .default
         }
-        // Anyone still pointed at a superseded default indexer moves to KaChat's own. A custom
-        // indexer is kept.
-        if legacyIndexerURLs.contains(settings.indexerURL) {
-            settings.indexerURL = defaultIndexerURL
+        // Decoding moved a superseded default indexer (`supersededIndexerURLs`) forward: store
+        // the migrated values so they stick.
+        let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if raw?["indexerURL"] as? String != settings.indexerURL
+            || raw?["pushIndexerURL"] as? String != settings.pushIndexerURL {
             save(settings)
         }
         AppSettingsCache.shared.set(settings)

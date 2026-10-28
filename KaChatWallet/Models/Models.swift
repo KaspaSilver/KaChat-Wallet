@@ -691,12 +691,27 @@ struct AppSettings: Codable {
     var lastPoolPersistDate: Date?       // Track when pool was last saved
 
     // Default URLs per network
-    static let defaultIndexerURL = "https://kachat.duckdns.org"
-    /// The testnet-10 KaChat indexer (Kaspa-Quick-Start's `kachat-testnet` publish target): push
-    /// and `.kachat` names, on one name with the mainnet route split. Port 7443: 443 on that
-    /// address is answered by another proxy (the gift service's certificate).
-    static let defaultTestnetIndexerURL = "https://tnkachat.duckdns.org:7443"
-    static let defaultPushIndexerURL = "https://kachat.duckdns.org"
+    static let defaultIndexerURL = "https://indexer.kachat.app"
+    /// Testnet has no KaChat indexer: blank, so push and `.kachat` names stay off there until
+    /// someone enters an indexer in Connection Settings (names then read from the chain).
+    static let defaultTestnetIndexerURL = ""
+    static let defaultPushIndexerURL = "https://indexer.kachat.app"
+    /// Retired mainnet indexer defaults: `indexer.kasia.fyi` (offline), the community
+    /// `indexer.kasia.wtf`, and KaChat's own earlier `kachat.duckdns.org`. A setting still on
+    /// one of these moves to the current default; a custom indexer is kept.
+    static let supersededIndexerURLs: Set<String> = [
+        "https://indexer.kasia.fyi", "https://indexer.kasia.wtf", "https://kachat.duckdns.org"
+    ]
+    /// The retired testnet-10 indexer: a testnet setting still on it goes blank.
+    static let supersededTestnetIndexerURLs: Set<String> = ["https://tnkachat.duckdns.org:7443"]
+    static func migratedIndexerURL(_ url: String, network: NetworkType) -> String {
+        var key = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while key.hasSuffix("/") { key.removeLast() }
+        switch network {
+        case .mainnet: return supersededIndexerURLs.contains(key) ? defaultIndexerURL : url
+        case .testnet: return supersededTestnetIndexerURLs.contains(key) ? defaultTestnetIndexerURL : url
+        }
+    }
     static let defaultKNSMainnetURL = "https://api.knsdomains.org/mainnet/api/v1"
     static let defaultKNSTestnetURL = "https://api.knsdomains.org/tn10/api/v1"
     static let defaultKaspaMainnetURL = "https://api.kaspa.org"
@@ -867,10 +882,11 @@ struct AppSettings: Codable {
             return stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : stored
         }
         let indexerDefault = networkType == .testnet ? AppSettings.defaultTestnetIndexerURL : AppSettings.defaultIndexerURL
-        indexerURL = try filled(.indexerURL, indexerDefault)
-        // The superseded kasia.wtf push default migrates forward to KaChat's own push service.
+        // Superseded defaults migrate: mainnet (kasia, kachat.duckdns.org) to indexer.kachat.app,
+        // testnet (tnkachat.duckdns.org) to blank.
+        indexerURL = AppSettings.migratedIndexerURL(try filled(.indexerURL, indexerDefault), network: networkType)
         let storedPush = try filled(.pushIndexerURL, networkType == .testnet ? AppSettings.defaultTestnetIndexerURL : AppSettings.defaultPushIndexerURL)
-        pushIndexerURL = storedPush == "https://indexer.kasia.wtf" ? AppSettings.defaultPushIndexerURL : storedPush
+        pushIndexerURL = AppSettings.migratedIndexerURL(storedPush, network: networkType)
 
         kaspaRestAPIURL = try container.decodeIfPresent(String.self, forKey: .kaspaRestAPIURL) ?? AppSettings.defaultKaspaRestURL(for: networkType)
         connectionProfiles = try container.decodeIfPresent([String: ConnectionProfile].self, forKey: .connectionProfiles) ?? [:]
@@ -882,14 +898,12 @@ struct AppSettings: Codable {
         if connectionProfiles[NetworkType.testnet.rawValue]?.kaspaRestAPIURL == AppSettings.legacyDefaultKaspaTestnetURL {
             connectionProfiles[NetworkType.testnet.rawValue]?.kaspaRestAPIURL = AppSettings.defaultKaspaTestnetURL
         }
-        // A blank indexer in the stashed testnet profile means the testnet indexer.
-        if var stashed = connectionProfiles[NetworkType.testnet.rawValue] {
-            func filled(_ value: String) -> String {
-                value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppSettings.defaultTestnetIndexerURL : value
-            }
-            stashed.indexerURL = filled(stashed.indexerURL)
-            stashed.pushIndexerURL = filled(stashed.pushIndexerURL)
-            connectionProfiles[NetworkType.testnet.rawValue] = stashed
+        // The stashed profiles get the same indexer migration as the live settings.
+        for network in NetworkType.allCases {
+            guard var stashed = connectionProfiles[network.rawValue] else { continue }
+            stashed.indexerURL = AppSettings.migratedIndexerURL(stashed.indexerURL, network: network)
+            stashed.pushIndexerURL = AppSettings.migratedIndexerURL(stashed.pushIndexerURL, network: network)
+            connectionProfiles[network.rawValue] = stashed
         }
         kaspaExplorer = try container.decodeIfPresent(KaspaExplorer.self, forKey: .kaspaExplorer) ?? .default
         trustedNodeAddress = try container.decodeIfPresent(String.self, forKey: .trustedNodeAddress) ?? AppSettings.defaultTrustedNodeAddress
@@ -1116,7 +1130,7 @@ struct ConnectionProfile: Codable, Equatable {
     var savedNodeAddresses: [SavedNodeAddress]
 
     /// What a network starts with. Testnet: the public testnet REST API, automatic node
-    /// discovery, and KaChat's testnet-10 indexer for push and .kachat names.
+    /// discovery, and no indexer (push and .kachat names stay off unless one is entered).
     static func defaults(for network: NetworkType) -> ConnectionProfile {
         switch network {
         case .mainnet:
