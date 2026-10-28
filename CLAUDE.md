@@ -81,7 +81,8 @@ for v in light dark tinted; do python3 tools/make_logo.py KaChatWallet/Resources
 ## Identifiers
 
 - Bundle ID `com.kachat.wallet`, keychain group `$(AppIdentifierPrefix)com.kachat.wallet`, URL
-  scheme `kachatwallet`, background task `com.kachat.wallet.messageFetch` (the name is historical;
+  schemes `kapay` (what KaPost opens to pay a request: `kapay://pay/<address>?...`, the same
+  tail as `kachat://pay/`) and `kachatwallet` (its old name, still accepted), background task `com.kachat.wallet.messageFetch` (the name is historical;
   it refreshes the balance). None of these are shared with KaChat, so the two apps never read each
   other's keychain or storage.
 - Team `RP4Z22SFSD` (the KaChat developer's Apple team; the wallet ships under that account)

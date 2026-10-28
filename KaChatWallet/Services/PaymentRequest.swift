@@ -70,7 +70,10 @@ enum KaChatInternalLink: Equatable {
         // `pathComponents` percent-decodes for us, and drops the leading "/" marker below.
         let parts = url.pathComponents.filter { $0 != "/" }
         switch scheme {
-        case "kachat":
+        // kapay:// is KaPay's own scheme: KaPost hands its payment requests over with it
+        // (kachat:// opens KaChat). kachatwallet:// is its name from before KaPay. The targets
+        // are the same as kachat://.
+        case "kachat", "kapay", "kachatwallet":
             // kachat://<target>/<payload> - exactly one payload component, so a link with extra
             // path segments (kachat://pay/a/b) is rejected rather than silently truncated.
             guard let host = url.host?.lowercased(), parts.count == 1, let payload = parts.first else { return nil }
